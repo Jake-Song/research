@@ -163,8 +163,12 @@ async def run():
 
     scorer = DetectionScorer(client=client, n_examples_shown=1)
     scorer_result = await scorer(record)
-    print(f"\n--- DetectionScorer score ({len(scorer_result.score)} samples) ---")
-    for i, out in enumerate(scorer_result.score):
-        print(f"  [{i}] prediction={out.prediction} probability={out.probability}")
+    outs = scorer_result.score
+    correct_count = sum(1 for o in outs if o.correct)
+    print(f"\n--- DetectionScorer score ({len(outs)} samples, accuracy {correct_count}/{len(outs)}) ---")
+    for i, out in enumerate(outs):
+        text = "".join(out.str_tokens)
+        mark = "✓" if out.correct else "✗"
+        print(f"  [{i}] {mark} truth={out.activating} pred={out.prediction}  {text!r}")
 
 asyncio.run(run())
