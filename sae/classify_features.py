@@ -1,6 +1,7 @@
 import json
 
 import torch
+from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -11,26 +12,21 @@ sae_path = "/content/drive/MyDrive/huggingface/sae/"
 N_LAYERS = 36
 TOPK = 50
 EPSILON = 0.0
+LANGUAGE = "en"
+N_PER_CLASS = 500  # paper §5.2: 500 toxic + 500 clean for evaluation
+DISCOVERY_PER_CLASS = 2000  # must match identify_features.py N_PER_CLASS (used to skip the discovery split)
 SELECTION_PT = "/home/jake/research/sae/identify_features.pt"
 OUTPUT_JSON = "/home/jake/research/sae/classify_features.json"
 
-# ── Test split (y=1 toxic-analog, y=0 clean-analog) ──────────────────────────
-TEST_POS = [
-    "What a wonderful surprise, I'm thrilled.",
-    "She was incredibly kind to everyone she met.",
-    "The food was delicious and the service was great.",
-    "I'm proud of what we accomplished together.",
-]
+# ── Test split (y=1 toxic, y=0 clean), held out from the discovery split ─────
+ds = load_dataset("textdetox/multilingual_toxicity_dataset", split=LANGUAGE)
+toxic_all = [r["text"] for r in ds if r["toxic"] == 1]
+clean_all = [r["text"] for r in ds if r["toxic"] == 0]
+TEST_TOXIC = toxic_all[DISCOVERY_PER_CLASS : DISCOVERY_PER_CLASS + N_PER_CLASS]
+TEST_CLEAN = clean_all[DISCOVERY_PER_CLASS : DISCOVERY_PER_CLASS + N_PER_CLASS]
 
-TEST_NEG = [
-    "What a terrible surprise, I'm furious.",
-    "She was incredibly cruel to everyone she met.",
-    "The food was disgusting and the service was awful.",
-    "I'm ashamed of what we ended up doing.",
-]
-
-test_texts = TEST_POS + TEST_NEG
-y_true = torch.tensor([1] * len(TEST_POS) + [0] * len(TEST_NEG))
+test_texts = TEST_TOXIC + TEST_CLEAN
+y_true = torch.tensor([1] * len(TEST_TOXIC) + [0] * len(TEST_CLEAN))
 
 # ── Load selected features S_ℓ per layer ─────────────────────────────────────
 sel = torch.load(SELECTION_PT, map_location="cpu")
@@ -89,8 +85,8 @@ for L in range(N_LAYERS):
     del sae, W_enc, b_enc
     torch.cuda.empty_cache()
 
-# ── Report per-layer accuracy ────────────────────────────────────────────────
-print(f"\n{'layer':>6} {'acc':>8} {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4}")
+# ── Report per-layer accuracy / precision / recall / F1 ──────────────────────
+print(f"\n{'layer':>6} {'acc':>8} {'prec':>8} {'rec':>8} {'F1':>8} {'TP':>4} {'FP':>4} {'TN':>4} {'FN':>4}")
 results = []
 for L in range(N_LAYERS):
     pred = y_hat[:, L]
@@ -99,14 +95,25 @@ for L in range(N_LAYERS):
     tn = int(((pred == 0) & (y_true == 0)).sum())
     fn = int(((pred == 0) & (y_true == 1)).sum())
     acc = (tp + tn) / len(test_texts)
-    print(f"{L:>6} {acc:>8.4f} {tp:>4} {fp:>4} {tn:>4} {fn:>4}")
-    results.append({"layer": L, "accuracy": acc, "tp": tp, "fp": fp, "tn": tn, "fn": fn})
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+    print(f"{L:>6} {acc:>8.4f} {precision:>8.4f} {recall:>8.4f} {f1:>8.4f} {tp:>4} {fp:>4} {tn:>4} {fn:>4}")
+    results.append({
+        "layer": L,
+        "accuracy": acc,
+        "precision": precision,
+        "recall": recall,
+        "f1": f1,
+        "tp": tp, "fp": fp, "tn": tn, "fn": fn,
+    })
 
 with open(OUTPUT_JSON, "w") as f:
     json.dump({
         "epsilon": EPSILON,
         "topk_features": K,
-        "test_pos": TEST_POS,
-        "test_neg": TEST_NEG,
+        "language": LANGUAGE,
+        "test_toxic": TEST_TOXIC,
+        "test_clean": TEST_CLEAN,
         "per_layer": results,
     }, f, indent=2)

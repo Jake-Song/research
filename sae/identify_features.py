@@ -1,6 +1,7 @@
 import json
 
 import torch
+from datasets import load_dataset
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -11,6 +12,8 @@ sae_path = "/content/drive/MyDrive/huggingface/sae/"
 N_LAYERS = 36
 TOPK = 50
 TOPK_FEATURES = 20
+LANGUAGE = "en"
+N_PER_CLASS = 2000  # paper §5.2: 2000 toxic + 2000 clean for feature discovery
 OUTPUT_PT = "/home/jake/research/sae/identify_features.pt"
 OUTPUT_JSON = "/home/jake/research/sae/identify_features.top.json"
 
@@ -18,30 +21,12 @@ tokenizer = AutoTokenizer.from_pretrained(model_path)
 model = AutoModelForCausalLM.from_pretrained(model_path, dtype=torch.float32).to(device)
 model.eval()
 
-POS = [
-    "I love this movie, it was wonderful.",
-    "What a fantastic meal, absolutely delicious.",
-    "She is such a kind and generous person.",
-    "The concert last night was amazing.",
-    "I'm so happy with how things turned out.",
-    "This book is brilliant and inspiring.",
-    "The weather today is beautiful.",
-    "He did an excellent job on the project.",
-]
+ds = load_dataset("textdetox/multilingual_toxicity_dataset", split=LANGUAGE)
+TOXIC = [r["text"] for r in ds if r["toxic"] == 1][:N_PER_CLASS]
+CLEAN = [r["text"] for r in ds if r["toxic"] == 0][:N_PER_CLASS]
 
-NEG = [
-    "I hate this movie, it was terrible.",
-    "What a disgusting meal, absolutely revolting.",
-    "She is such a cruel and selfish person.",
-    "The concert last night was awful.",
-    "I'm so disappointed with how things turned out.",
-    "This book is dreadful and boring.",
-    "The weather today is miserable.",
-    "He did a horrible job on the project.",
-]
-
-texts = POS + NEG
-n_pos = len(POS)
+texts = TOXIC + CLEAN
+n_toxic = len(TOXIC)
 
 # ── Pass A: capture residuals at every layer for every example ───────────────
 captured: dict[int, torch.Tensor] = {}
@@ -92,31 +77,32 @@ for L in range(N_LAYERS):
 
 # ── Aggregate (Eq. 14: Δ_f = Σ_{y=1} h_{i,f} − Σ_{y=0} h_{i,f}) ──────────────
 fired = (max_acts > 0).float()
-pos_count = fired[:n_pos].sum(0)
-neg_count = fired[n_pos:].sum(0)
-diff = pos_count - neg_count
+toxic_count = fired[:n_toxic].sum(0)
+clean_count = fired[n_toxic:].sum(0)
+diff = toxic_count - clean_count
 
 per_layer_topv, per_layer_topi = diff.topk(TOPK_FEATURES, dim=-1)
 
-print(f"\n{'layer':>6} {'rank':>5} {'feature':>8} {'pos':>5} {'neg':>5} {'diff':>7}")
+print(f"\n{'layer':>6} {'rank':>5} {'feature':>8} {'toxic':>6} {'clean':>6} {'diff':>7}")
 top_entries = []
 for L in range(N_LAYERS):
     for k in range(TOPK_FEATURES):
         f = int(per_layer_topi[L, k])
         score = float(per_layer_topv[L, k])
-        p = float(pos_count[L, f])
-        n = float(neg_count[L, f])
-        print(f"{L:>6} {k:>5} {f:>8} {p:>5.0f} {n:>5.0f} {score:+7.0f}")
-        top_entries.append({"layer": L, "rank": k, "feature": f, "pos_count": p, "neg_count": n, "diff": score})
+        p = float(toxic_count[L, f])
+        n = float(clean_count[L, f])
+        print(f"{L:>6} {k:>5} {f:>8} {p:>6.0f} {n:>6.0f} {score:+7.0f}")
+        top_entries.append({"layer": L, "rank": k, "feature": f, "toxic_count": p, "clean_count": n, "diff": score})
 
 # ── Save ─────────────────────────────────────────────────────────────────────
 torch.save({
-    "pos_count": pos_count,
-    "neg_count": neg_count,
+    "toxic_count": toxic_count,
+    "clean_count": clean_count,
     "diff": diff,
     "max_acts": max_acts,
-    "pos_texts": POS,
-    "neg_texts": NEG,
+    "toxic_texts": TOXIC,
+    "clean_texts": CLEAN,
+    "language": LANGUAGE,
     "topk": TOPK,
     "topk_features": TOPK_FEATURES,
     "n_layers": N_LAYERS,
