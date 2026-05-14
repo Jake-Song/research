@@ -1,113 +1,176 @@
-# Qwen-Scope: Turning Sparse Features into Development Tools for LLMs
+# Qwen-Scope: Sparse Features as Development Tools for LLMs
 
-**Authors:** Qwen Team (Alibaba) — core: Boyi Deng, Xu Wang, Yaoning Wang, Yu Wan, Yubo Ma, Baosong Yang
-**Date:** 2026-04-30
-**Release:** [huggingface.co/collections/Qwen/qwen-scope](https://huggingface.co/collections/Qwen/qwen-scope) · [modelscope.cn/collections/Qwen/Qwen-Scope](https://modelscope.cn/collections/Qwen/Qwen-Scope)
-**Full text:** [qwen_scope.txt](qwen_scope.txt)
+**arxiv:** [2605.11887](https://arxiv.org/abs/2605.11887) — Qwen Team (Alibaba)
+**Venue framing:** COLM 2024 template, technical report style
+**Core claim:** SAE features should be treated as a **reusable representation-level interface for model development** (steering, evaluation, data curation, post-training), not merely a post-hoc analysis tool.
 
-## TL;DR
+## 1. The SAE Release
 
-Qwen-Scope is an open-source suite of **Sparse Autoencoders (SAEs)** trained on **every layer** of 7 Qwen3 / Qwen3.5 backbones (dense + MoE), released as 14 SAE groups. The contribution is not the SAEs themselves — it's the argument and evidence that SAE features should be treated as a **reusable representation-level interface** for model development, not just a post-hoc analysis tool. The paper demonstrates this across four directions: inference-time steering, evaluation-set analysis, data-centric workflows (classification + synthesis), and post-training (SFT + RL).
+14 SAE groups across 7 Qwen3 / Qwen3.5 backbones, residual stream, **all layers**, Top-k activation.
 
-## The SAE release
-
-| Backbone | Type | Layers | Hidden | SAE width | Expansion | Top-k (L0) |
+| Backbone | Type | Layers | Hidden | SAE width | Expansion | Top-k |
 |---|---|---|---|---|---|---|
-| Qwen3-1.7B-Base | Dense | 1–28 | 2048 | 32K | 16 | 50, 100 |
-| Qwen3-8B-Base | Dense | 1–36 | 4096 | 64K | 16 | 50, 100 |
-| Qwen3.5-2B-Base | Dense | 1–24 | 2048 | 32K | 16 | 50, 100 |
-| Qwen3.5-9B-Base | Dense | 1–32 | 4096 | 64K | 16 | 50, 100 |
-| Qwen3.5-27B-Instruct | Dense | 1–64 | 5120 | 80K | 16 | 50, 100 |
-| Qwen3-30B-A3B-Base | MoE | 1–48 | 2048 | 32K / 128K | 16 / 64 | 50 / 100 |
-| Qwen3.5-35B-A3B-Base | MoE | 1–40 | 2048 | 32K / 128K | 16 / 64 | 50 / 100 |
+| Qwen3-1.7B-Base | Dense | 1–28 | 2048 | 32K | 16 | {50, 100} |
+| Qwen3-8B-Base | Dense | 1–36 | 4096 | 64K | 16 | {50, 100} |
+| Qwen3.5-2B-Base | Dense | 1–24 | 2048 | 32K | 16 | {50, 100} |
+| Qwen3.5-9B-Base | Dense | 1–32 | 4096 | 64K | 16 | {50, 100} |
+| Qwen3.5-27B-Instruct | Dense | 1–64 | 5120 | 80K | 16 | {50, 100} |
+| Qwen3-30B-A3B-Base | MoE | 1–48 | 2048 | 32K + 128K | 16 / 64 | 50 / 100 |
+| Qwen3.5-35B-A3B-Base | MoE | 1–40 | 2048 | 32K + 128K | 16 / 64 | 50 / 100 |
 
-**Training notes:**
-- Top-k SAE on residual-stream activations, trained on in-house pretraining data.
-- Auxiliary loss (weight 1/32, following Gao et al. 2024) to keep dead features near zero.
-- Filter activations with extremely large L2 norms (esp. first-token activations on Qwen3-1.7B / 8B) to stabilize reconstruction (Marks et al. 2024).
-- Qwen3.5-27B is the only backbone whose SAEs are trained on the **instruct** variant; all others on base.
-- For MoE models, an additional wider 128K / 64× SAE is released to capture finer-grained features.
+**Training stability tricks:**
+- Auxiliary loss weight 1/32 (Gao et al. 2024) → almost zero dead features at convergence.
+- L2-norm outlier filter on activations (Marks et al. 2024) — outliers cluster on first-token positions in Qwen3-1.7B/8B.
+- Qwen3.5-27B trained on the **instruct** model; all others on **base**.
+- MoE models get a second, much wider (128K, 64×) SAE for finer-grained features.
 
-## Four applications
+## 2. Steering (§3)
 
-### 1. Inference-time steering (§3)
+Standard form: `h' ← h + α · d` where `d` is an SAE feature direction. Two ways to find features:
 
-Standard recipe: `h' = h + α·d`, where `d` is an SAE feature direction.
+1. **Contrastive** — define positive/negative prompt sets, rank features by activation difference.
+2. **Auto-interpretation** — collect top-activating contexts, ask a strong LLM for a natural-language description (Delphi-style pipeline, Paulo et al.).
 
-**Two ways to find features:**
-- **Contrastive** — pick a target behavior, build positive + negative example sets, rank features by mean-activation difference (He et al. 2025, Bayat et al. 2025).
-- **Auto-interpretation** — describe features from their top-activating contexts using a stronger LLM (Paulo et al. — the Delphi pipeline, [[summary_delphi_autointerp]]).
+**Two demos on Qwen3:**
+- Diagnosing a Chinese leak in an English response → rank by activation → feature 6159 ("Chinese") → suppress → English restored.
+- Style transfer: amplify feature 36398 ("classical Chinese") to convert a modern Chinese continuation into classical literary style.
 
-**Two case studies on Qwen3:**
-- Diagnose unintended Chinese mixing in English output → rank features on the bad response → find feature 6159 ("Chinese") → suppress → English restored.
-- Style transfer: activate feature 36398 ("classical Chinese") to rewrite a modern Chinese story in classical literary style.
+The steering equation `h' = h + α·d` is the same operator used in both directions — only the sign of α changes.
 
-### 2. Evaluation analysis (§4)
+## 3. Evaluation (§4) — Benchmark Analysis Without Running Models
 
-Treats a benchmark's "feature footprint" `F(D) = ⋃ F(xᵢ)` as a fingerprint of what it probes — letting you analyze benchmarks **without running models**.
-
-**Benchmark redundancy.** Defines a feature-coverage curve `cₙ = E[|F(S)| / |F(D)|]` analogous to the Kendall-τ ranking curve `τₙ`. The scalar metric is
+Per-sample feature footprint:
 ```
-R̂(D) = AUC(cₙ) · N / |F(D)|     (Equation 9)
+F(x_i) = { j : z_j(x_i) > 0 }  (last-token SAE encoding)
+F(D)   = ⋃ F(x_i)
 ```
-The `N/|F(D)|` correction prevents small-feature-set benchmarks from looking artificially diverse.
 
-**Headline result:** Across 17 benchmarks (MMLU, MMLU-Redux/Pro, SuperGPQA, C-Eval, CMMLU, GSM8K, MATH, GPQA-D, TheoremQA, MBPP, EvalPlus, MultiPL-E, MMMLU, INCLUDE, KOR-Bench, ICLEval) and 26 Qwen pretraining checkpoints, `R̂(D)` correlates with the true performance-redundancy `R(D)` at **Spearman ρ ≈ 0.85** (Pearson r ≈ 0.78 in log-y). GSM8K is high-redundancy despite small size; SuperGPQA is low-redundancy despite 26K samples.
+### Redundancy (intra-benchmark)
+Performance-based redundancy `R(D) = (1/N) Σ τ_n` measured via Kendall's τ between full-benchmark and subset rankings across M models. Expensive — requires `O(M·N)` forward passes.
 
-**Inter-benchmark similarity.** Asymmetric and min-normalized feature-overlap matrices reveal e.g. GSM8K↔MATH ≈ 0.63, MBPP↔MultiPL-E ≈ 0.53, with code and math forming distinct clusters.
-
-### 3. Data-centric workflows (§5–6)
-
-**Toxicity classification (§5).** A simple rule-based classifier on top of contrastively-discovered "toxic" features:
-- Cross-lingual transfer: features discovered in English generalize to other languages.
-- Multi-layer composition helps mostly when single-layer signal is weak; rank layers by `top1-diff` and only add layers when needed.
-- **Data efficiency:** ~10% of the discovery set recovers ~99% of full-data classifier performance. The most stable toxic-biased features are found early.
-
-**Safety data synthesis (§6).** Move data construction from the prompt level to the **representation level**:
-1. Define a seed corpus `D_seed`. For each feature `(ℓ, f)`, compute a binary coverage `c_f^(ℓ)(D_seed)`.
-2. Pair each feature with a natural-language explanation; a judge model assigns relevance score `s_f^(ℓ)` and gives the candidate inventory `T = {(ℓ,f) : s_f^(ℓ) ≥ τ}`.
-3. Highest-priority targets are the **uncovered** ones: `T_miss = {(ℓ,f) ∈ T : c_f^(ℓ)(D_seed) = 0}`.
-4. For each target, generate a vanilla prompt + adversarial rewrites, plus a refusal-style or benign response (depending on safety label). **Verify in feature space:** retain only examples where `h_{i,f}^(ℓ) = 1`.
-
-**Headline numbers (Qwen3-8B, layer 30, ~65K-latent SAE, WildJailbreak seed):**
-- Feature-driven synthesis reaches **99.74% target-feature coverage**; random safety-related synthesis hits ~90% at the same budget; natural sampling plateaus much lower.
-- With only **4k real + 4k feature-driven synth** safety data: ASR ↓ to 24.0, RR ↓ to 20.5, Acc 77.75 — approaches the **120k safety-only** baseline (Acc 78.75) while topping IFEval (53.23) and TruthfulQA (57.32).
-- Holds when prompt+response generation is swapped from GPT-4/3.5 to Gemini-3-Flash → the gain comes from feature targeting, not the generator.
-
-### 4. Post-training: SASFT (§7)
-
-**Problem:** Unexpected code-switching — multilingual LLMs occasionally drop tokens of an unintended language into a response. Standard SFT only pushes toward the target response and gives no negative signal against the wrong language.
-
-**Method (Deng et al. 2026, ICLR):**
-1. Identify a target-language SAE feature contrastively (positive = target-language texts, negative = non-target).
-2. Add an auxiliary **feature-suppression loss** during SFT on non-target-language data:
+**Feature-based proxy** (no model evaluation):
 ```
-L_training = L_cross-entropy + λ · L_suppress
+ĉ_n  = E[|F(S)| / |F(D)|]        over random subsets S of size n
+R̂(D) = AUC(c_n) · N / |F(D)|     # Eq. 9
 ```
-This explicitly trains the model to *not* activate the unwanted-language feature.
+The `N/|F(D)|` correction prevents a small absolute feature set from looking artificially "diverse" purely because its normalized coverage curve climbs fast.
 
-### 4. Post-training: SAE-guided RL (§8)
+**Headline:** Across 17 benchmarks × 26 Qwen pretraining checkpoints, Spearman ρ(R, R̂) ≈ **0.85**. GSM8K is high-redundancy despite small size (1.3K); SuperGPQA is low-redundancy despite 26K samples — feature-redundancy captures this where raw size cannot.
 
-**Problem:** Endless repetition is a low-frequency RL failure mode — vanilla DAPO rollouts almost never produce repetitive samples, so RL has no signal to suppress them.
+### Inter-benchmark similarity
+Asymmetric overlap:
+```
+overlap(D1, D2) = |F(D1) ∩ F(D2)| / |F(D1)|
+```
+Symmetric (min-normalized) version correlates with cross-model Pearson similarity at **75.5%** after partialling out MMLU as a general-ability proxy (up from 68.4% raw). Practical use: low-overlap benchmarks probe distinct capabilities (keep both); high-overlap pairs are consolidation candidates. Example: `overlap(GSM8K, MATH) = 0.63`, `overlap(MATH, GSM8K) = 0.10` — MATH subsumes GSM8K's feature footprint, not vice versa.
 
-**Method:** In each DAPO rollout group of size G, replace one sample with an **SAE-steered repetitive rollout** (amplify a repetition feature during generation). This guarantees the group contains a rare-negative example that gets a low reward, providing an explicit gradient against repetition.
+## 4. Data Classification (§5) — Toxicity
 
-**Results across Qwen3-1.7B / 8B / 30B-A3B:** Repeat ratio drops sharply and stays much lower than vanilla RL throughout training. General benchmarks (MMLU, Flores, HellaSwag, LogiQA, IFEval, MGSM) stay competitive — MGSM improves notably (+5.56 on 1.7B, +5.84 on 30B-A3B). Effect on other capabilities is mixed and task-dependent.
+Pipeline reduces to two stages, no trained head:
 
-## Why this matters
+1. **Discovery** on a fixed split (2K toxic + 2K clean per language). Compute per-feature firing-rate difference
+   ```
+   Δ_f^(ℓ) = P(h=1 | y=1) − P(h=1 | y=0)
+   ```
+   and take the top K per layer.
+2. **Inference**: OR-rule over the selected feature set
+   ```
+   ŷ = 1[ max_{f ∈ S_ℓ, t} a_{f,t}^(ℓ) > ε ]
+   ```
 
-The throughline: **the same SAE feature dictionary supports all four directions.** Once you have it, you can:
-- *steer* features at inference,
-- *measure* benchmark coverage in feature space,
-- *prioritize* training data by which features it does or doesn't activate,
-- *inject* feature-targeted losses or rollouts during SFT / RL.
+**Findings:**
+- F1 > 0.90 on English with very small K (1–10) for both Qwen3-1.7B and 8B; best layer is middle-to-late.
+- Cross-lingual transfer: English-discovered features generalize well to European languages, weaker for Amharic/Arabic/Chinese — feature overlap peaks in middle layers and is more stable in the larger model.
+- **`top1-diff` layer-selection proxy** — pick the layer where the single best feature has the largest Δ, no eval data needed — recovers near-best layer almost everywhere.
+- **Data efficiency:** ~10% of discovery data → ~99% of full-data F1. Top toxic-biased features are the most stable; they emerge early.
 
-Prior SAE releases (Gemma Scope, Llama Scope) emphasized the artifact; Qwen-Scope's framing emphasizes the **workflow**. The data-synthesis and RL-rare-negative results are the most novel contributions.
+## 5. Data Synthesis (§6) — Safety-Oriented
 
-## Future directions (§9.2)
+The data-construction unit moves from prompts to **internal directions**:
 
-- **Reasoning-model interpretability** across CoT branches and resampled trajectories (Macar et al. 2026, Bogdan et al. 2025).
-- **Internals-based monitoring** for deception, hidden objectives, jailbreak susceptibility, hallucination.
-- **Model diffing** before/after fine-tuning or RL — which features change?
-- **Interpretability-driven training** generalizing the SASFT / RL recipes.
-- **Data-centric interpretability** — feature-coverage as a data-curation signal.
+1. Build seed corpus `D_seed`; compute coverage `c_f^(ℓ)(D_seed)` (any firing?).
+2. Pair each feature with a natural-language explanation; judge model scores semantic relevance `s_f^(ℓ)` → eligible set `T = { (ℓ,f) : s ≥ τ }`.
+3. Priority synthesis targets: `T_miss = { (ℓ,f) ∈ T : coverage = 0 }`.
+4. For each target, generate **vanilla prompt + adversarial rewrites**, assign safety label, generate refusal-style or benign response.
+5. **Representation-level verification** — keep only examples where `h_{i,f}^(ℓ) = 1`.
+
+**Setup:** Qwen3-8B, layer-30 SAE (~65K latents), WildJailbreak seed corpus.
+
+**Coverage:** Feature-driven synthesis reaches **99.74%** of target features at a fixed budget vs. random safety-related synthesis ≈ 90% and natural sampling much lower.
+
+**Downstream SFT (Alpaca + safety + synth):**
+| Setting | ASR↓ | RR↓ | Acc↑ | IFEval | TQA | MMLU |
+|---|---|---|---|---|---|---|
+| + Safety 8k | 22.0 | 34.5 | 71.75 | 53.05 | 57.11 | 76.25 |
+| + Safety 120k | 21.0 | 21.5 | **78.75** | 48.06 | 54.80 | 76.34 |
+| + Safety 4k + Random synth 4k | 20.0 | 36.0 | 72.00 | 48.98 | 56.94 | 76.08 |
+| + Safety 4k + **Feature synth 4k** | 24.0 | 20.5 | 77.75 | **53.23** | **57.32** | **76.58** |
+
+4k+4k with feature-driven synth approaches the 120k safety-only result while topping IFEval/TQA/MMLU. Holds when swapping GPT-4/3.5 for Gemini-3-Flash — the gain is from feature targeting, not the generator.
+
+## 6. SASFT (§7) — Auxiliary Loss for Code-Switching
+
+**Problem:** Multilingual LLMs occasionally leak tokens of an unintended language; standard SFT supplies no negative signal.
+
+**Two observations that motivate the method:**
+- Pre-activation of the unintended language's SAE feature **rises in the tokens leading up to** the first code-switched token, peaks at the switch.
+- Directional ablation `x' = x − λd` at the immediately-preceding token monotonically cuts the code-switching ratio (irrelevant features have no effect → causal).
+
+**Method:** Identify language-specific features by **monolinguality score** `ν_s^L = μ_s^L − γ_s^L`. Add a suppression loss on non-target-language data:
+```
+L_reduce = E_{j ≠ L} E_{x ∈ D_j} Σ_{s ∈ S_L} ReLU(f_s(x) − α_j)
+L_train  = L_CE + λ · L_reduce
+```
+α_j is a per-language pre-estimated baseline (using 0 would be too aggressive when average pre-activation is negative).
+
+**Results (Qwen3-1.7B / 8B, 110k & 210k mixes; targets zh, ru, ko):** SASFT cuts code-switching ratio by ≥50% in most cells; some cells go to 0% (Qwen3-1.7B → ko). General benchmarks (MMLU, HumanEval, Flores, HellaSwag, LogiQA, IFEval, MGSM) stay flat or improve, except for a small dip on a couple of benchmarks.
+
+## 7. SAE-Guided DAPO (§8) — Rare-Negative Augmentation in RL
+
+**Problem:** Endless repetition is a low-frequency RL failure mode — vanilla DAPO rollouts almost never produce it, so RL gets no gradient against it.
+
+**Failed first attempt:** Use SAE steering to generate *positive* rollouts. Bad: steering doesn't fix multi-step reasoning, degrades fluency, and the model learns bad patterns.
+
+**Revised:** Use steering to generate *negative* rollouts. Fluency doesn't matter when the model is meant to avoid them. Identification:
+- For each repeated token, compare SAE activation at first vs. last occurrence in context. Features with the largest jump are "repetition features" (causal: bidirectional steering both induces and suppresses repetition).
+- Repetition features also fire in **benign** repetition (e.g., reproducing answer choices) — so we do **not** suppress them at training time (would hurt normal behavior). Instead, augment.
+
+**Algorithm:** In each DAPO rollout group of size G, sample G−1 normal outputs and **one** SAE-steered output (`h' = h + α·d`) biased toward repetition. The steered sample reliably gets a low reward → explicit negative gradient against repetition.
+
+**Results on Qwen3-1.7B / 8B / 30B-A3B:** Repeat-ratio drops sharply within the first training steps and stays much lower than vanilla DAPO throughout. General-capability benchmarks remain competitive; MGSM gains notably (+5.56 on 1.7B, +5.84 on 30B-A3B). Other benchmarks are mixed but never significantly worse.
+
+## 8. Why the SAEs are the Same SAEs Everywhere
+
+The four applications share one feature dictionary per (model, layer). That's the practical point of the report: once you've trained an SAE, the marginal cost of each new use case is small.
+
+| Direction | What changes per use case |
+|---|---|
+| Steering | Sign and magnitude of α |
+| Evaluation | What set of inputs you encode |
+| Classification | Which features you OR over |
+| Data synthesis | Which features you target + a feature-space accept filter |
+| SASFT | An auxiliary loss penalizing one feature set |
+| SAE-DAPO | One steered rollout per group |
+
+## 9. Connections to this Repo (`/home/jake/research/sae/`)
+
+Your local `sae/` looks like a **reimplementation of pieces of Qwen-Scope** against an externally-trained Qwen3.5-2B/9B SAE checkpoint (`layer{L}.sae.pt`, W_enc 32K×2048, Top-k=50). Direct correspondences:
+
+- **`sae.py`** — Minimal SAE encoder (`pre_acts = residual @ W_enc.T + b_enc; topk(50)`). Equivalent to the Top-k ReLU operator referenced in §2.
+- **`identify_features.py`** — Almost certainly the §3 / §5 contrastive feature-discovery step (POS/NEG → mean-activation Δ). `pipeline.py:84–110` implements exactly that with a sentiment toy set.
+- **`classify_features.py`** — §5 toxicity-classifier OR-rule. Your modified status (in `git status`) suggests you're iterating on this — paper recipes worth checking: top1-diff layer selection (§5.3.1), multi-layer composition (only when single-layer weak), 10% discovery-data sufficiency.
+- **`benchmark_redundancy.py`** — §4 redundancy / overlap. The exact formula to mirror is `R̂(D) = AUC(c_n) · N / |F(D)|` (Eq. 9); compute `c_n` by random-subset sampling rather than enumerating.
+- **`explain.py` + `score.py` + `pipeline.py`** — Delphi auto-interpretation (DefaultExplainer + DetectionScorer + FuzzingScorer) — this is §3's "automatic interpretation methods" branch. Already wired through OpenRouter / Claude Sonnet 4.5.
+- **`steer.py`** — §3 / §8 steering. `h' = h + α·d`. The §8 contribution is using *negative* steering for RL rare-negatives — only relevant if you wire this into a DAPO/GRPO loop (you have a `grpo/` folder).
+
+**If you're reproducing:** the order in the paper (training → steering → eval → classification → synthesis → SFT → RL) is also a sensible build order, since each downstream step reuses the same SAE + the same `(ℓ, f) → meaning` mapping you built earlier. The §5 toxicity classifier is the smallest end-to-end win and a good first integration test for a fresh SAE checkpoint.
+
+**If you want a low-effort novel angle:** the paper leaves "uncovered but eligible" features as the priority synthesis targets (§6), but stops short of using **feature-coverage curves** of a candidate training set as a *data-selection* signal (rather than synthesis) — i.e., greedy subset selection on real data to maximize `|F(S)|`. Mentioned as a future direction in §9.2 ("Data-centric interpretability") but not done. Your `benchmark_redundancy.py` plus a sampler would be 80% of that machinery.
+
+## 10. Future Directions (paper §9.2)
+
+- **Reasoning-model interpretability** — features across CoT branches / resampled trajectories.
+- **Internals-based monitoring** — deception, hidden objectives, jailbreak susceptibility, hallucination.
+- **Model diffing** — which features shift under SFT/RL?
+- **Interpretability-driven training** — generalize SASFT / DAPO rare-negative to other low-frequency failure modes.
+- **Data-centric interpretability** — feature coverage as a data-curation signal.
