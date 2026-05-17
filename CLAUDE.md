@@ -14,3 +14,7 @@
 - Use `uv` for all Python package management (not pip, poetry, or conda).
 - Add dependencies with `uv add <package>`.
 - Run scripts with `uv run <script>`.
+
+## Available Skills
+
+Skills are defined in `.claude/skills/` and run inline:
