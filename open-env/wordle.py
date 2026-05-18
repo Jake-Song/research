@@ -105,7 +105,7 @@ def parse_args() -> argparse.Namespace:
         help="Model identifier passed to GRPOTrainer for fine-tuning.",
     )
     parser.add_argument(
-        "--env-url", type=str, default="https://jakemu-wordle.hf.space/web", help="URL for the environment server."
+        "--env-url", type=str, default="https://jakemu-wordle.hf.space", help="URL for the environment server."
     )
     parser.add_argument(
         "--system-prompt-path",
