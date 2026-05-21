@@ -1,0 +1,28 @@
+[
+  {
+    "id": "lookup-capital",
+    "prompt": "What is the capital of France?",
+    "notes": {
+      "france_capital": "Paris"
+    },
+    "expected_answer": "Paris",
+    "required_tools": ["lookup_note"]
+  },
+  {
+    "id": "add-two-numbers",
+    "prompt": "What is 17 plus 25?",
+    "notes": {},
+    "expected_answer": "42",
+    "required_tools": ["add_integers"]
+  },
+  {
+    "id": "lookup-and-add",
+    "prompt": "How many total letters are in the stored first and second words?",
+    "notes": {
+      "first_word": "signal",
+      "second_word": "trace"
+    },
+    "expected_answer": "11",
+    "required_tools": ["lookup_note", "add_integers"]
+  }
+]
