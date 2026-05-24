@@ -23,3 +23,4 @@ Skills are defined in `.claude/skills/` and run inline:
 - If a skill matches, read its full `SKILL.md` and follow those instructions inline.
 - Current skills:
   - `read-arxiv-paper`: Use when asked to read or summarize an arXiv paper from an arXiv URL.
+  - `bootstrap-llm-experiment`: Use when asked to bootstrap/scaffold a new local LLM inference experiment as a top-level dir.
