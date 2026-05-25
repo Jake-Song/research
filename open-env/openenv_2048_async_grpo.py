@@ -23,7 +23,6 @@ from the training policy.
 Caveats:
 - strategy_succeeds() hits an external HF Space synchronously; under async
   generation it becomes the rollout-throughput bottleneck.
-- execute_with_time_limit() uses signal.SIGALRM, which is main-thread only.
 """
 
 from __future__ import annotations
@@ -32,18 +31,15 @@ import argparse
 import ast
 import itertools
 import os
-import signal
 import sys
-from functools import wraps
+import time
 from typing import Callable
 
 import numpy as np
 from datasets import Dataset
-from peft import LoraConfig
 
 from openspiel_env import OpenSpielAction, OpenSpielEnv, OpenSpielObservation
-from trl import GRPOConfig
-from trl.experimental.async_grpo import AsyncGRPOTrainer
+from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
 
 
 # ---------------------------------------------------------------------------
@@ -83,39 +79,27 @@ def convert_to_board(current_state):
 # Strategy execution with timeout
 # ---------------------------------------------------------------------------
 
-
-def execute_with_time_limit(seconds):
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            def handler(signum, frame):
-                raise TimeoutError(f"Timed out after {seconds} seconds.")
-
-            old_handler = signal.signal(signal.SIGALRM, handler)
-            signal.alarm(seconds)
-            try:
-                result = func(*args, **kwargs)
-            finally:
-                signal.alarm(0)
-                signal.signal(signal.SIGALRM, old_handler)
-            return result
-        return wrapper
-    return decorator
+_STRATEGY_TIMEOUT_S = 5.0
 
 
-def _execute_strategy(env: Env2048, strategy: Callable, current_state):
+def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielObservation):
+    """Run strategy on the env until done or timeout. Thread-safe (no SIGALRM)."""
     assert callable(strategy)
 
+    deadline = time.monotonic() + _STRATEGY_TIMEOUT_S
     steps = 0
     total_reward = 0
 
     while not current_state.done:
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"Timed out after {_STRATEGY_TIMEOUT_S}s.")
+
         board, size = convert_to_board(current_state.info_state)
         action = strategy(board)
         try:
             action = int(action)
         except Exception:
-            return steps, False
+            return steps, False, current_state.info_state
 
         steps += 1
         if type(action) is not int or action not in current_state.legal_actions:
@@ -127,11 +111,6 @@ def _execute_strategy(env: Env2048, strategy: Callable, current_state):
             total_reward += env.reward
 
     return steps, max(itertools.chain.from_iterable(board)) == 2048, current_state.info_state
-
-
-@execute_with_time_limit(5)
-def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielObservation):
-    return _execute_strategy(env, strategy, current_state)
 
 
 # ---------------------------------------------------------------------------
@@ -220,20 +199,20 @@ All helper functions should be inside def strategy. Only output the short functi
 def function_works(completions, **kwargs):
     scores = []
     for completion in completions:
-        score = 0
         response = completion[0]["content"]
         function = extract_function(response)
-        if function is not None:
-            ok, info = check_python_modules(function)
-        if function is None or "error" in info:
-            score = -2.0
+        if function is None:
+            scores.append(-2.0)
+            continue
+        ok, info = check_python_modules(function)
+        if "error" in info:
+            scores.append(-2.0)
         else:
             try:
                 create_locked_down_function(function)
-                score = 1.0
+                scores.append(1.0)
             except Exception:
-                score = -0.5
-        scores.append(score)
+                scores.append(-0.5)
     return scores
 
 
@@ -257,9 +236,11 @@ def make_strategy_succeeds(env_url: str):
             response = completion[0]["content"]
             function = extract_function(response)
 
-            if function is not None:
-                ok, info = check_python_modules(function)
-            if function is None or "error" in info:
+            if function is None:
+                scores.append(0)
+                continue
+            ok, info = check_python_modules(function)
+            if "error" in info:
                 scores.append(0)
                 continue
             try:
@@ -329,9 +310,9 @@ def main() -> None:
         {"prompt": [[{"role": "user", "content": PROMPT}] for _ in range(args.dataset_size)]}
     )
 
-    grpo_config = GRPOConfig(
+    grpo_config = AsyncGRPOConfig(
         # Training schedule / optimization
-        use_liger_kernel=True,
+        #use_liger_kernel=True,
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
@@ -346,15 +327,14 @@ def main() -> None:
         log_completions=True,
         num_completions_to_print=2,
         chat_template_kwargs={"enable_thinking": False},
+        weight_sync_steps=10,
+        max_staleness=3,
 
         # vLLM (async => server mode on a separate GPU)
-        use_vllm=True,
-        vllm_mode="server",
-        vllm_server_host=args.vllm_server_host,
-        vllm_server_port=args.vllm_server_port,
+        vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
 
-        # Precision (bf16 + LoRA; quantization is incompatible with NCCL weight transfer)
-        dtype="bfloat16",
+        # Precision (bf16; quantization is incompatible with NCCL weight transfer)
+        bf16=True,
 
         # Logging / reporting
         output_dir=args.output_dir,
@@ -370,13 +350,6 @@ def main() -> None:
         push_to_hub=args.push_to_hub,
     )
 
-    peft_config = LoraConfig(
-        r=16,
-        lora_alpha=32,
-        target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"],
-        task_type="CAUSAL_LM",
-    )
-
     trainer = AsyncGRPOTrainer(
         model=args.model_id,
         reward_funcs=[
@@ -386,14 +359,13 @@ def main() -> None:
         ],
         train_dataset=dataset,
         args=grpo_config,
-        peft_config=peft_config,
     )
 
     trainer.train()
 
     trainer.save_model(args.output_dir)
     if args.push_to_hub:
-        trainer.push_to_hub(commit_message="Upload LoRA adapter")
+        trainer.push_to_hub(commit_message="Upload model")
 
 
 if __name__ == "__main__":
