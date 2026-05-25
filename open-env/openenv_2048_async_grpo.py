@@ -337,8 +337,8 @@ def main() -> None:
         log_completions=True,
         num_completions_to_print=2,
         chat_template_kwargs={"enable_thinking": False},
-        weight_sync_steps=10,
-        max_staleness=3,
+        weight_sync_steps=1,
+        max_staleness=4,
 
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
