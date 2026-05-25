@@ -1,3 +1,14 @@
+# /// script
+# dependencies = [
+#     "git+https://huggingface.co/spaces/Jakemu/openspiel_env",
+#     "transformers==5.2.0",
+#     "trl[vllm]==1.4.0",
+#     "vllm>=0.17.1",
+#     "wandb",
+#     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
+# ]
+# ///
+
 """Async GRPO training for OpenSpiel 2048 strategy generation.
 
 Two-GPU cloud setup: vLLM server on GPU 0, AsyncGRPOTrainer on GPU 1.
@@ -5,7 +16,7 @@ NCCL is used to push updated trainer weights into the live vLLM server.
 
     # Terminal 1 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
-      uv run vllm serve Qwen/Qwen3-4B \
+      uv run vllm serve Qwen/Qwen3.5-2B \
         --max-model-len 3072 \
         --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
@@ -279,9 +290,9 @@ def make_strategy_succeeds(env_url: str):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for 2048 strategies.")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-4B")
+    parser.add_argument("--model-id", default="Qwen/Qwen3.5-2B")
     parser.add_argument("--env-url", default="https://jakemu-openspiel-env.hf.space")
-    parser.add_argument("--output-dir", default="Qwen3-4B-2048-async-grpo")
+    parser.add_argument("--output-dir", default="Qwen3.5-2B-2048-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=3000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-completion-length", type=int, default=1024)
