@@ -4,15 +4,15 @@ Two-GPU cloud setup: vLLM server on GPU 0, AsyncGRPOTrainer on GPU 1.
 NCCL is used to push updated trainer weights into the live vLLM server.
 
     # Terminal 1 - vLLM server on GPU 0
-    CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \\
-      uv run vllm serve Qwen/Qwen3-4B \\
-        --max-model-len 3072 \\
-        --logprobs-mode processed_logprobs \\
+    CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
+      uv run vllm serve Qwen/Qwen3-4B \
+        --max-model-len 3072 \
+        --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
 
     # Terminal 2 - trainer on GPU 1
-    CUDA_VISIBLE_DEVICES=1 \\
-      HF_TOKEN=... WANDB_API_KEY=... \\
+    CUDA_VISIBLE_DEVICES=1 \
+      HF_TOKEN=... WANDB_API_KEY=... \
       uv run accelerate launch open-env/openenv_2048_async_grpo.py
 
 The VLLM_SERVER_DEV_MODE flag, processed_logprobs mode, and NCCL
