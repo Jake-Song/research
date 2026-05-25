@@ -44,6 +44,7 @@ import itertools
 import os
 import sys
 import time
+import traceback
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
@@ -261,16 +262,24 @@ def make_strategy_succeeds(env_url: str):
 
         env2048 = None
         try:
-            env2048 = Env2048(base_url=env_url)
-            current_state = env2048.reset()
-            steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
-            return 20.0 if if_done else 2.0
-        except TimeoutError as e:
-            print(f"Exception = {str(e)}")
-            return -1.0
-        except Exception as e:
-            print(f"Exception = {str(e)}")
-            return -3.0
+            try:
+                env2048 = Env2048(base_url=env_url)
+                current_state = env2048.reset()
+            except Exception:
+                print(f"Failed to set up Env2048 from {env_url}", file=sys.stderr, flush=True)
+                traceback.print_exc()
+                raise
+
+            try:
+                steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
+                return 20.0 if if_done else 2.0
+            except TimeoutError as e:
+                print(f"Strategy timed out: {e}", file=sys.stderr, flush=True)
+                return -1.0
+            except Exception:
+                print("Generated strategy failed during execution", file=sys.stderr, flush=True)
+                traceback.print_exc()
+                return -3.0
         finally:
             if env2048 is not None:
                 env2048.client.close()
