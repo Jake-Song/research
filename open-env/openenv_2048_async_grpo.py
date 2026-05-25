@@ -261,7 +261,7 @@ def make_strategy_succeeds(env_url: str):
 
         env2048 = None
         try:
-            env2048 = Env2048(base_url=env_url).sync()
+            env2048 = Env2048(base_url=env_url)
             current_state = env2048.reset()
             steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
             return 20.0 if if_done else 2.0
