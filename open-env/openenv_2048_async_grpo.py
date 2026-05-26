@@ -42,8 +42,6 @@ import itertools
 import os
 import sys
 import time
-import traceback
-from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 import numpy as np
@@ -247,32 +245,36 @@ def make_strategy_succeeds(env_url: str):
             function = extract_function(response)
             if function is not None:
                 ok, info = check_python_modules(function)
-                if function is None or "error" in info:
-                    scores.append(0)
-                    continue
-                try:
-                    new_strategy = create_locked_down_function(function)
-                except:
-                    scores.append(0)
-                    continue
-                try:
-                    # Reset OpenEnv to an initial state!
-                    env2048 = Env2048(base_url=env_url)
-                    current_state = env2048.reset()
-                    steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
-                    if if_done:
-                        scores.append(20.0)
-                    else:
-                        scores.append(2.0)
-                except TimeoutError as e:
-                    print(f"Exception = {str(e)}")
-                    scores.append(-1.0)
-                except Exception as e:
-                    print(f"Exception = {str(e)}")
-                    scores.append(-3.0)
-                finally:
-                    env2048.client.close()
+            if function is None or "error" in info:
+                scores.append(0)
+                continue
+            try:
+                new_strategy = create_locked_down_function(function)
+            except Exception:
+                scores.append(0)
+                continue
+
+            env2048 = None
+            try:
+                # Reset OpenEnv to an initial state!
+                env2048 = Env2048(base_url=env_url)
+                current_state = env2048.reset()
+                steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
+                scores.append(20.0 if if_done else 2.0)
+            except TimeoutError as e:
+                print(f"Strategy timed out: {e}")
+                scores.append(-1.0)
+            except Exception as e:
+                print(f"Exception = {e}")
+                scores.append(-3.0)
+            finally:
+                if env2048 is not None:
+                    try:
+                        env2048.client.close()
+                    except Exception:
+                        pass
         return scores
+
     return strategy_succeeds
 
 
