@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from openspiel_env import OpenSpielEnv, OpenSpielAction
 
 # url = "https://jakemu-openspiel-env.hf.space"  # Duplicate the Space and update this!
-url = "http://localhost:8000"
+url = "http://localhost:8002"
 
 GAME_NAME = "2048"
 NUM_WORKERS = 8
