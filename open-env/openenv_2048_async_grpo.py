@@ -241,53 +241,40 @@ def no_cheating(completions, **kwargs):
             scores.append(-1.0)
     return scores
 
-
-_STRATEGY_PARALLELISM = 8
-
-
 def make_strategy_succeeds(env_url: str):
-    def score_one(completion):
-        response = completion[0]["content"]
-        function = extract_function(response)
-
-        if function is None:
-            return 0
-        ok, info = check_python_modules(function)
-        if "error" in info:
-            return 0
-        try:
-            new_strategy = create_locked_down_function(function)
-        except Exception:
-            return 0
-
-        env2048 = None
-        try:
-            try:
-                env2048 = Env2048(base_url=env_url)
-                current_state = env2048.reset()
-            except Exception:
-                print(f"Failed to set up Env2048 from {env_url}", file=sys.stderr, flush=True)
-                traceback.print_exc()
-                raise
-
-            try:
-                steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
-                return 20.0 if if_done else 2.0
-            except TimeoutError as e:
-                print(f"Strategy timed out: {e}", file=sys.stderr, flush=True)
-                return -1.0
-            except Exception:
-                print("Generated strategy failed during execution", file=sys.stderr, flush=True)
-                traceback.print_exc()
-                return -3.0
-        finally:
-            if env2048 is not None:
-                env2048.client.close()
-
     def strategy_succeeds(completions, **kwargs):
-        with ThreadPoolExecutor(max_workers=_STRATEGY_PARALLELISM) as pool:
-            return list(pool.map(score_one, completions))
-
+        scores = []
+        for completion in completions:
+            response = completion[0]["content"]
+            function = extract_function(response)
+            if function is not None:
+                ok, info = check_python_modules(function)
+                if function is None or "error" in info:
+                    scores.append(0)
+                    continue
+                try:
+                    new_strategy = create_locked_down_function(function)
+                except:
+                    scores.append(0)
+                    continue
+                try:
+                    # Reset OpenEnv to an initial state!
+                    env2048 = Env2048(base_url=env_url)
+                    current_state = env2048.reset()
+                    steps, if_done, info_state = execute_strategy(env2048, new_strategy, current_state)
+                    if if_done:
+                        scores.append(20.0)
+                    else:
+                        scores.append(2.0)
+                except TimeoutError as e:
+                    print(f"Exception = {str(e)}")
+                    scores.append(-1.0)
+                except Exception as e:
+                    print(f"Exception = {str(e)}")
+                    scores.append(-3.0)
+                finally:
+                    env2048.client.close()
+        return scores
     return strategy_succeeds
 
 
