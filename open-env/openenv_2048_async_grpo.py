@@ -42,6 +42,8 @@ import itertools
 import os
 import sys
 import time
+import signal
+from functools import wraps
 from typing import Callable
 
 import numpy as np
@@ -88,27 +90,40 @@ def convert_to_board(current_state):
 # Strategy execution with timeout
 # ---------------------------------------------------------------------------
 
-_STRATEGY_TIMEOUT_S = 5.0
+def execute_with_time_limit(seconds):
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            def handler(signum, frame):
+                raise TimeoutError(f"Timed out after {seconds} seconds.")
 
+            # Set the signal handler and alarm
+            old_handler = signal.signal(signal.SIGALRM, handler)
+            signal.alarm(seconds)
+            try:
+                result = func(*args, **kwargs)
+            finally:
+                # Disable the alarm after function finishes
+                signal.alarm(0)
+                signal.signal(signal.SIGALRM, old_handler)
+            return result
+        return wrapper
+    return decorator
 
-def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielObservation):
-    """Run strategy on the env until done or timeout. Thread-safe (no SIGALRM)."""
+def _execute_strategy(env: Env2048, strategy: Callable, current_state):
     assert callable(strategy)
 
-    deadline = time.monotonic() + _STRATEGY_TIMEOUT_S
     steps = 0
     total_reward = 0
 
     while not current_state.done:
-        if time.monotonic() >= deadline:
-            raise TimeoutError(f"Timed out after {_STRATEGY_TIMEOUT_S}s.")
 
         board, size = convert_to_board(current_state.info_state)
         action = strategy(board)
         try:
             action = int(action)
-        except Exception:
-            return steps, False, current_state.info_state
+        except:
+            return steps, False
 
         steps += 1
         if type(action) is not int or action not in current_state.legal_actions:
@@ -120,6 +135,10 @@ def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielO
             total_reward += env.reward
 
     return steps, max(itertools.chain.from_iterable(board)) == 2048, current_state.info_state
+
+@execute_with_time_limit(5)
+def execute_strategy(env: Env2048, strategy : Callable, current_state : OpenSpielObservation):
+    return _execute_strategy(env, strategy, current_state)
 
 
 # ---------------------------------------------------------------------------
