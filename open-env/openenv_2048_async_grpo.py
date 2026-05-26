@@ -16,15 +16,13 @@ NCCL is used to push updated trainer weights into the live vLLM server.
 
     # Terminal 1 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
-      uv run vllm serve Qwen/Qwen3.5-2B \
+      uv run vllm serve Qwen/Qwen3-1.7B \
         --max-model-len 3072 \
         --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
 
     # Terminal 2 - trainer on GPU 1
-    CUDA_VISIBLE_DEVICES=1 \
-      HF_TOKEN=... WANDB_API_KEY=... \
-      uv run accelerate launch open-env/openenv_2048_async_grpo.py
+    CUDA_VISIBLE_DEVICES=1 uv run accelerate launch open-env/openenv_2048_async_grpo.py
 
 The VLLM_SERVER_DEV_MODE flag, processed_logprobs mode, and NCCL
 weight-transfer config are all required by AsyncGRPOTrainer - without them
@@ -285,9 +283,9 @@ def make_strategy_succeeds(env_url: str):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for 2048 strategies.")
-    parser.add_argument("--model-id", default="Qwen/Qwen3.5-2B")
-    parser.add_argument("--env-url", default="https://jakemu-openspiel-env.hf.space")
-    parser.add_argument("--output-dir", default="Qwen3.5-2B-2048-async-grpo")
+    parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--env-url", default="http://localhost:8002")
+    parser.add_argument("--output-dir", default="Qwen3-1.7B-2048-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=3000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-completion-length", type=int, default=1024)
