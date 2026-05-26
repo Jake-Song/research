@@ -43,7 +43,8 @@ import os
 import sys
 import time
 from typing import Callable
-
+import wandb
+import huggingface_hub
 import numpy as np
 from datasets import Dataset
 
@@ -304,13 +305,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--push-to-hub", action="store_true", default=True)
     parser.add_argument("--no-push-to-hub", dest="push_to_hub", action="store_false")
     parser.add_argument("--wandb-project", default="openenv-2048")
+    parser.add_argument("--wandb-name", default="openenv-2048")
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
-
-    os.environ.setdefault("WANDB_PROJECT", args.wandb_project)
+    huggingface_hub.login()
+    wandb.login()
+    wandb.init(project=args.wandb_project, name=args.wandb_name)
 
     dataset = Dataset.from_dict(
         {"prompt": [[{"role": "user", "content": PROMPT}] for _ in range(args.dataset_size)]}
