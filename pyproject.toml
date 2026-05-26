@@ -4,10 +4,15 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "openenv-openspiel-env",
+]
 
 [dependency-groups]
 dev = [
     "ipykernel>=7.2.0",
     "ipywidgets>=8.1.8",
 ]
+
+[tool.uv.sources]
+openenv-openspiel-env = { git = "https://huggingface.co/spaces/Jakemu/openspiel_env" }

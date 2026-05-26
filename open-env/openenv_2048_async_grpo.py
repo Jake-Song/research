@@ -1,9 +1,9 @@
 # /// script
 # dependencies = [
 #     "git+https://huggingface.co/spaces/Jakemu/openspiel_env",
-#     "transformers==5.2.0",
-#     "trl[vllm]==1.4.0",
-#     "vllm>=0.17.1",
+#     "transformers==5.9.0",
+#     "trl[vllm]==1.5.0",
+#     "vllm==0.18.0",
 #     "wandb",
 #     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
 # ]
@@ -305,7 +305,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--push-to-hub", action="store_true", default=True)
     parser.add_argument("--no-push-to-hub", dest="push_to_hub", action="store_false")
     parser.add_argument("--wandb-project", default="openenv-2048")
-    parser.add_argument("--wandb-name", default="openenv-2048")
+    parser.add_argument("--wandb-name", default="async-grpo")
     return parser.parse_args()
 
 
