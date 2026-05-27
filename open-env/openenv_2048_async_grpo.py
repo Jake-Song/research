@@ -90,6 +90,23 @@ def convert_to_board(current_state):
 # ---------------------------------------------------------------------------
 
 _STRATEGY_TIMEOUT_S = 5.0
+_STRATEGY_CALL_TIMEOUT_S = 1.0
+
+
+def _call_with_timeout(fn, board, timeout_s):
+    deadline = time.monotonic() + timeout_s
+
+    def _trace(frame, event, arg):
+        if time.monotonic() >= deadline:
+            raise TimeoutError(f"strategy(board) exceeded {timeout_s}s")
+        return _trace
+
+    prev = sys.gettrace()
+    sys.settrace(_trace)
+    try:
+        return fn(board)
+    finally:
+        sys.settrace(prev)
 
 
 def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielObservation):
@@ -105,7 +122,7 @@ def execute_strategy(env: Env2048, strategy: Callable, current_state: OpenSpielO
             raise TimeoutError(f"Timed out after {_STRATEGY_TIMEOUT_S}s.")
 
         board, size = convert_to_board(current_state.info_state)
-        action = strategy(board)
+        action = _call_with_timeout(strategy, board, _STRATEGY_CALL_TIMEOUT_S)
         try:
             action = int(action)
         except Exception:
