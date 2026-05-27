@@ -1,6 +1,5 @@
 # /// script
 # dependencies = [
-#     "git+https://huggingface.co/spaces/Jakemu/openspiel_env",
 #     "transformers==5.9.0",
 #     "trl[vllm]==1.5.0",
 #     "vllm==0.18.0",
