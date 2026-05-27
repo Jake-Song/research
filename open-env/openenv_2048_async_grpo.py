@@ -2,7 +2,6 @@
 # dependencies = [
 #     "transformers==5.9.0",
 #     "trl[vllm]==1.5.0",
-#     "vllm==0.18.0",
 #     "wandb",
 #     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
 # ]
