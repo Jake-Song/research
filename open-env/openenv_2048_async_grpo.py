@@ -88,7 +88,7 @@ def convert_to_board(current_state):
 # ---------------------------------------------------------------------------
 
 _STRATEGY_TIMEOUT_S = 5.0
-_STRATEGY_CALL_TIMEOUT_S = 1.0
+_STRATEGY_CALL_TIMEOUT_S = 3.0
 
 
 def _call_with_timeout(fn, board, timeout_s):
