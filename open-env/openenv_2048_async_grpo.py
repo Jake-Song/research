@@ -1,9 +1,9 @@
 # /// script
 # dependencies = [
-#     "transformers==5.9.0",
-#     "trl[vllm]==1.5.0",
-#     "wandb",
 #     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
+#     "trl[vllm]==1.5.0",
+#     "transformers==5.9.0",
+#     "wandb",
 # ]
 # ///
 
