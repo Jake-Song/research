@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 
 from datasets import Dataset
 from transformers import AutoTokenizer
 
 from agent_world_model_env import AWMEnv
-from agent_world_model_env.server.prompts import DEFAULT_SYSTEM_PROMPT
 from openenv.core.env_server.mcp_types import CallToolAction
+
+from openenv_awm_async_grpo import AWMEnvironment, SYSTEM_PROMPT
 
 
 def build_dataset(env_url: str, dataset_size: int) -> Dataset:
@@ -24,7 +26,7 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
         for task_idx, task in enumerate(scenario["tasks"]):
             prompts.append(
                 [
-                    {"role": "system", "content": DEFAULT_SYSTEM_PROMPT},
+                    {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": task},
                 ]
             )
@@ -33,11 +35,23 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
     return Dataset.from_dict({"prompt": prompts})
 
 
-def prompt_token_length(tokenizer, messages: list[dict]) -> int:
+def collect_tools(env_url: str) -> list:
+    """Collect the env's tool-calling methods exactly as AsyncRolloutWorker does."""
+    environment = AWMEnvironment(env_url)
+    return [
+        member
+        for name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+        if name != "reset" and not name.startswith("_")
+    ]
+
+
+def prompt_token_length(tokenizer, messages: list[dict], tools: list) -> int:
     text = tokenizer.apply_chat_template(
         messages,
+        tools=tools or None,  # `or None`: avoid empty-tools boilerplate
         add_generation_prompt=True,
         tokenize=False,
+        enable_thinking=False,  # matches chat_template_kwargs in training
     )
     return len(tokenizer.encode(text, add_special_tokens=False))
 
@@ -50,6 +64,7 @@ def main() -> None:
     args = parser.parse_args()
 
     dataset = build_dataset(args.env_url, args.dataset_size)
+    tools = collect_tools(args.env_url)
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -57,7 +72,7 @@ def main() -> None:
     lengths: list[int] = []
     longest_idx = 0
     for i, messages in enumerate(dataset["prompt"]):
-        n = prompt_token_length(tokenizer, messages)
+        n = prompt_token_length(tokenizer, messages, tools)
         lengths.append(n)
         if n >= lengths[longest_idx]:
             longest_idx = i

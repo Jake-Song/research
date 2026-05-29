@@ -22,7 +22,7 @@ Two-GPU cloud setup with vLLM serving + NCCL weight transfer:
     # Terminal 2 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
       uv run vllm serve Qwen/Qwen3-1.7B \
-        --max-model-len 10000 \
+        --max-model-len 15000 \
         --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
 
@@ -44,8 +44,6 @@ from __future__ import annotations
 import argparse
 import json
 
-import huggingface_hub
-import wandb
 from datasets import Dataset
 from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
 
@@ -94,7 +92,7 @@ def format_tools(tools) -> str:
 # Environment wrapper (created once per inflight slot by AsyncGRPOTrainer)
 # ---------------------------------------------------------------------------
 
-_MAX_TOOL_RESPONSE_CHARS = 4000
+_MAX_TOOL_RESPONSE_CHARS = 2000
 
 
 class AWMEnvironment:
@@ -218,8 +216,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="Qwen3-1.7B-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=10)
-    parser.add_argument("--max-completion-length", type=int, default=1024)
+    parser.add_argument("--max-turns", type=int, default=None)
+    parser.add_argument("--max-completion-length", type=int, default=12000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
@@ -238,6 +236,9 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    import huggingface_hub
+    import wandb
+
     args = parse_args()
     huggingface_hub.login()
     wandb.login()
