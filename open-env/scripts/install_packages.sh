@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-uvx hf auth login()
+uvx hf auth login
 uv venv
 uv pip install "trl[vllm]"
 uv pip install -U transformers
