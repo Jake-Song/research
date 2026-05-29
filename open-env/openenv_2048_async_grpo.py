@@ -1,12 +1,3 @@
-# /// script
-# dependencies = [
-#     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
-#     "trl[vllm]==1.5.0",
-#     "transformers==5.9.0",
-#     "wandb",
-# ]
-# ///
-
 """Async GRPO training for OpenSpiel 2048 strategy generation.
 
 Two-GPU cloud setup: vLLM server on GPU 0, AsyncGRPOTrainer on GPU 1.

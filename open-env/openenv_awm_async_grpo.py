@@ -18,7 +18,7 @@ Two-GPU cloud setup with vLLM in TRL server mode:
 
     # Terminal 2 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 uv run trl vllm-serve \
-      --model Qwen/Qwen3-1.7B --port 8000 --max_model_len 4096
+      --model Qwen/Qwen3-1.7B --port 8000 --max_model_len 10000
 
     # Terminal 3 - trainer on GPU 1 (sql verifier needs an LLM judge)
     export OPENENV_AWM_LLM_BASE_URL=... OPENENV_AWM_LLM_API_KEY=... OPENENV_AWM_LLM_MODEL=...
@@ -42,7 +42,7 @@ import re
 import huggingface_hub
 import wandb
 from datasets import Dataset
-from trl import GRPOConfig, GRPOTrainer
+from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
 from trl.experimental.openenv import generate_rollout_completions
 
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
@@ -253,10 +253,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
     parser.add_argument("--env-url", default="http://localhost:8899")
     parser.add_argument("--output-dir", default="Qwen3-1.7B-awm-grpo")
-    parser.add_argument("--dataset-size", type=int, default=3000)
+    parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-completion-length", type=int, default=1024)
-    parser.add_argument("--max-steps", type=int, default=8)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
@@ -282,7 +281,7 @@ def main() -> None:
 
     dataset = build_dataset(args.env_url, args.dataset_size)
 
-    grpo_config = GRPOConfig(
+    grpo_config = AsyncGRPOConfig(
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -298,10 +297,10 @@ def main() -> None:
         log_completions=True,
         num_completions_to_print=2,
         chat_template_kwargs={"enable_thinking": False},
+        weight_sync_steps=1,
+        max_staleness=4,
 
-        # vLLM (server mode on a separate GPU)
-        use_vllm=True,
-        vllm_mode="server",
+        # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
 
         # Precision
@@ -321,12 +320,12 @@ def main() -> None:
         push_to_hub=args.push_to_hub,
     )
 
-    trainer = GRPOTrainer(
+    trainer = AsyncGRPOTrainer(
         model=args.model_id,
         reward_funcs=[task_reward],
         train_dataset=dataset,
         args=grpo_config,
-        rollout_func=make_rollout_func(args.env_url, args.max_steps),
+        rollout_func=make_rollout_func(args.env_url, args.num_generations),
     )
 
     trainer.train()

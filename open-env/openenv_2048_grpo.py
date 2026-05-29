@@ -1,17 +1,3 @@
-# /// script
-# dependencies = [
-#     "transformers",
-#     "trl[vllm]",
-#     "vllm",
-#     "wandb",
-#     "peft",
-#     "bitsandbytes",
-#     "torchao",
-#     "liger-kernel",
-#     "openspiel-env @ git+https://huggingface.co/spaces/Jakemu/openspiel_env",
-# ]
-# ///
-
 """Sync GRPO training for OpenSpiel 2048 strategy generation.
 
 Single-GPU setup: GRPOTrainer with colocated vLLM, 4-bit quantization, and LoRA.
