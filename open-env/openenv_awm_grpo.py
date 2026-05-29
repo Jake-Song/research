@@ -1,11 +1,3 @@
-# /// script
-# dependencies = [
-#     "trl[vllm]==1.5.0",
-#     "transformers==5.9.0",
-#     "wandb",
-# ]
-# ///
-
 """GRPO training for the Agent World Model (AWM) multi-turn MCP agent.
 
 AWM is an agentic environment: the model discovers MCP tools, calls them over
@@ -56,7 +48,8 @@ from trl.experimental.openenv import generate_rollout_completions
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from agent_world_model_env import AWMEnv
 from agent_world_model_env.server.prompts import DEFAULT_SYSTEM_PROMPT
-
+from dotenv import load_dotenv
+load_dotenv()
 
 # ---------------------------------------------------------------------------
 # Tool-call parsing helpers (copied from awm_example_usage.py)
