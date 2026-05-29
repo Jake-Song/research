@@ -30,6 +30,7 @@ import asyncio
 import json
 import os
 import re
+import time
 
 from openai import AsyncOpenAI
 from openenv.core.client_types import StepResult
@@ -37,7 +38,8 @@ from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 
 from agent_world_model_env import AWMEnv, AWMObservation
 from agent_world_model_env.server.prompts import DEFAULT_SYSTEM_PROMPT
-
+from dotenv import load_dotenv
+load_dotenv()
 
 def parse_tool_call(content: str) -> dict | None:
     """Extract the first <tool_call> block from LLM output."""
@@ -83,6 +85,7 @@ async def main():
         # =====================================================================
         # 1. List all scenarios (1,000 scenarios x 10 tasks each)
         # =====================================================================
+        step1_start = time.perf_counter()
         result: StepResult[AWMObservation] = await env.step(
             CallToolAction(tool_name="__list_scenarios__", arguments={})
         )
@@ -108,12 +111,15 @@ async def main():
                 scenario["tasks"][0],
             )
         print("=" * 100)
+        step1_elapsed = time.perf_counter() - step1_start
+        print(f"[Timing] Step 1 (list scenarios): {step1_elapsed:.3f}s")
 
         # =====================================================================
         # 2. Reset to a specific scenario and task
         # =====================================================================
         # Reset returns verifier support info (has_verifier: {sql: bool, code: bool} or None)
         # Pass LLM credentials for sql verifier mode (or set via OPENENV_AWM_LLM_* env vars)
+        step2_start = time.perf_counter()
         result: StepResult[AWMObservation] = await env.reset(
             scenario="e_commerce_33",
             task_idx=0,
@@ -130,16 +136,21 @@ async def main():
             f"total tools: {result.observation.num_tools}",
         )
         print("=" * 100)
+        step2_elapsed = time.perf_counter() - step2_start
+        print(f"[Timing] Step 2 (reset): {step2_elapsed:.3f}s")
 
         # =====================================================================
         # 3. List tools for this scenario
         # =====================================================================
+        step3_start = time.perf_counter()
         result: StepResult[AWMObservation] = await env.step(ListToolsAction())
         print("list tools results", f"total tools: {len(result.observation.tools)}")
         for tool in result.observation.tools[:3]:
             print(f"Tool: {tool.name}, Description: {tool.description}")
             print(f"Input Schema: {tool.input_schema}")
             print("=" * 100)
+        step3_elapsed = time.perf_counter() - step3_start
+        print(f"[Timing] Step 3 (list tools): {step3_elapsed:.3f}s")
 
         # =====================================================================
         # 4. Agent loop — LLM iteratively calls tools
@@ -149,6 +160,7 @@ async def main():
         print("Agent loop starts")
         print("=" * 100)
 
+        step4_start = time.perf_counter()
         MAX_ITERATIONS = 5
         TEMPERATURE = 1.0
         MAX_TOKENS = 2048
@@ -226,9 +238,13 @@ async def main():
         else:
             print(f"Max iterations ({MAX_ITERATIONS}) reached.")
 
+        step4_elapsed = time.perf_counter() - step4_start
+        print(f"[Timing] Step 4 (agent loop): {step4_elapsed:.3f}s")
+
         # =====================================================================
         # 5. Verification — call verify with different modes
         # =====================================================================
+        step5_start = time.perf_counter()
         print("=" * 100)
         result: StepResult[AWMObservation] = await env.step(
             CallToolAction(
@@ -250,16 +266,43 @@ async def main():
         print("reward_type:", result.observation.reward_type, "reward:", result.reward)
         print("=" * 100)
 
+        step5_elapsed = time.perf_counter() - step5_start
+        print(f"[Timing] Step 5 (verification): {step5_elapsed:.3f}s")
+
         # =====================================================================
         # 6. End episode — keep_session=True preserves all session artifacts
         #    (trajectory.json, DBs, server.py, server.log)
         # =====================================================================
+        step6_start = time.perf_counter()
         result: StepResult[AWMObservation] = await env.step(
             CallToolAction(tool_name="done", arguments={"keep_session": True})
         )
         print("episode done:", result.done)
         print("trajectory_path:", result.observation.trajectory_path)
         print("session_dir:", result.observation.session_dir)
+        step6_elapsed = time.perf_counter() - step6_start
+        print(f"[Timing] Step 6 (end episode): {step6_elapsed:.3f}s")
+
+        # =====================================================================
+        # Timing summary
+        # =====================================================================
+        total = (
+            step1_elapsed
+            + step2_elapsed
+            + step3_elapsed
+            + step4_elapsed
+            + step5_elapsed
+            + step6_elapsed
+        )
+        print("=" * 100)
+        print("Timing summary:")
+        print(f"  Step 1 (list scenarios): {step1_elapsed:.3f}s")
+        print(f"  Step 2 (reset):          {step2_elapsed:.3f}s")
+        print(f"  Step 3 (list tools):     {step3_elapsed:.3f}s")
+        print(f"  Step 4 (agent loop):     {step4_elapsed:.3f}s")
+        print(f"  Step 5 (verification):   {step5_elapsed:.3f}s")
+        print(f"  Step 6 (end episode):    {step6_elapsed:.3f}s")
+        print(f"  Total:                   {total:.3f}s")
 
 
 if __name__ == "__main__":
