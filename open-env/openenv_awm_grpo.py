@@ -1,6 +1,5 @@
 # /// script
 # dependencies = [
-#     "agent-world-model-env @ git+https://huggingface.co/spaces/Jakemu/agent_world_model_env",
 #     "trl[vllm]==1.5.0",
 #     "transformers==5.9.0",
 #     "wandb",
