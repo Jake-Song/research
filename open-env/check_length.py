@@ -1,4 +1,11 @@
-"""Measure token lengths of AWM GRPO dataset prompts (initial turn only)."""
+"""Measure token lengths of AWM GRPO dataset prompts (after the list_tools turn).
+
+The model only sees the 3 native wrapper tools (list_tools, call_tool, submit) at
+turn 0, but the real token cost shows up once it calls list_tools and the env
+returns the formatted MCP tool descriptions for the scenario. This script
+reproduces that turn: native tools as tool schemas, plus an assistant list_tools
+call and the env's list_tools output appended as a tool message.
+"""
 
 from __future__ import annotations
 
@@ -21,7 +28,7 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
         result = env.step(CallToolAction(tool_name="__list_scenarios__", arguments={}))
         scenarios = result.observation.scenarios
 
-    prompts = []
+    prompts, scenario_names = [], []
     for scenario in scenarios:
         for task_idx, task in enumerate(scenario["tasks"]):
             prompts.append(
@@ -30,22 +37,28 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
                     {"role": "user", "content": task},
                 ]
             )
+            scenario_names.append(scenario["name"])
 
-    prompts = prompts[:dataset_size]
-    return Dataset.from_dict({"prompt": prompts})
+    return Dataset.from_dict(
+        {"prompt": prompts[:dataset_size], "scenario": scenario_names[:dataset_size]}
+    )
 
 
-def collect_tools(env_url: str) -> list:
-    """Collect the env's tool-calling methods exactly as AsyncRolloutWorker does."""
-    environment = AWMEnvironment(env_url)
-    return [
-        member
-        for name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
-        if name != "reset" and not name.startswith("_")
+def prompt_token_length(
+    tokenizer, messages: list[dict], tools: list, list_tools_output: str
+) -> int:
+    # Reproduce the post-list_tools turn: the assistant calls list_tools and the
+    # env returns the formatted MCP tool descriptions as a tool message.
+    messages = messages + [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"type": "function", "function": {"name": "list_tools", "arguments": {}}}
+            ],
+        },
+        {"role": "tool", "name": "list_tools", "content": list_tools_output},
     ]
-
-
-def prompt_token_length(tokenizer, messages: list[dict], tools: list) -> int:
     text = tokenizer.apply_chat_template(
         messages,
         tools=tools or None,  # `or None`: avoid empty-tools boilerplate
@@ -64,15 +77,31 @@ def main() -> None:
     args = parser.parse_args()
 
     dataset = build_dataset(args.env_url, args.dataset_size)
-    tools = collect_tools(args.env_url)
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    # The 3 native wrapper tools (list_tools, call_tool, submit) become the tool
+    # schemas, exactly as AsyncRolloutWorker exposes them.
+    environment = AWMEnvironment(args.env_url)
+    tools = [
+        member
+        for name, member in inspect.getmembers(environment, predicate=inspect.ismethod)
+        if name != "reset" and not name.startswith("_")
+    ]
+
+    # list_tools output is per-scenario (a fresh sub-env per scenario), so reset
+    # once per scenario and cache the formatted tool string.
+    list_tools_by_scenario: dict[str, str] = {}
+
     lengths: list[int] = []
     longest_idx = 0
     for i, messages in enumerate(dataset["prompt"]):
-        n = prompt_token_length(tokenizer, messages, tools)
+        scenario = dataset["scenario"][i]
+        if scenario not in list_tools_by_scenario:
+            environment.reset(scenario=scenario, task_idx=0)
+            list_tools_by_scenario[scenario] = environment.list_tools()
+        n = prompt_token_length(tokenizer, messages, tools, list_tools_by_scenario[scenario])
         lengths.append(n)
         if n >= lengths[longest_idx]:
             longest_idx = i

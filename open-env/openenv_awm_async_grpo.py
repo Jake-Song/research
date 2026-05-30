@@ -21,8 +21,8 @@ Two-GPU cloud setup with vLLM serving + NCCL weight transfer:
 
     # Terminal 2 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
-      uv run vllm serve Qwen/Qwen3-1.7B \
-        --max-model-len 15000 \
+      uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+        --max-model-len 45000 \
         --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
 
@@ -145,8 +145,16 @@ class AWMEnvironment:
         Returns:
             A JSON string containing the verifier reward.
         """
+        result: self.env.step(
+            CallToolAction(
+                tool_name="verify",
+                arguments={"verifier_mode": "code"},
+            )
+        )
+        reward_code = float(result.reward or 0.0)
         result = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-        reward = float(result.reward or 0.0)
+        reward_sql = float(result.reward or 0.0)
+        reward = reward_code + reward_sql
         self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
         return json.dumps({"reward": reward})
 
@@ -211,13 +219,13 @@ def task_reward(completions, **kwargs):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-1.7B")
+    parser.add_argument("--model-id", default="Qwen/Qwen3-4B-Thinking-2507")
     parser.add_argument("--env-url", default="http://localhost:8899")
-    parser.add_argument("--output-dir", default="Qwen3-1.7B-awm-async-grpo")
+    parser.add_argument("--output-dir", default="Qwen3-4B-Thinking-2507-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=None)
-    parser.add_argument("--max-completion-length", type=int, default=12000)
+    parser.add_argument("--max-completion-length", type=int, default=1000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
