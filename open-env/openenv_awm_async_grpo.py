@@ -21,7 +21,7 @@ Two-GPU cloud setup with vLLM serving + NCCL weight transfer:
 
     # Terminal 2 - vLLM server on GPU 0
     CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
-      uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+      uv run vllm serve Qwen/Qwen3-4B-Instruct-2507 \
         --max-model-len 45000 \
         --logprobs-mode processed_logprobs \
         --weight-transfer-config '{"backend":"nccl"}'
@@ -219,9 +219,9 @@ def task_reward(completions, **kwargs):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-4B-Thinking-2507")
+    parser.add_argument("--model-id", default="Qwen/Qwen3-4B-Instruct-2507")
     parser.add_argument("--env-url", default="http://localhost:8899")
-    parser.add_argument("--output-dir", default="Qwen3-4B-Thinking-2507-awm-async-grpo")
+    parser.add_argument("--output-dir", default="Qwen/Qwen3-4B-Instruct-2507-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=3)
@@ -248,24 +248,6 @@ def main() -> None:
     import huggingface_hub
     import wandb
 
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-    from trl.chat_template_utils import qwen3_chat_template
-
-    model_name = "Qwen/Qwen3-4B-Thinking-2507"
-
-    # load the tokenizer and the model
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    # Qwen3-4B-Thinking-2507 ships its own chat template, which doesn't byte-for-byte
-    # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
-    # would raise. Swap in TRL's bundled qwen3 template (same <tool_call> format, and
-    # qwen3_schema already parses <think>...</think>) so the schema is recognized.
-    tokenizer.chat_template = qwen3_chat_template
-    model = AutoModelForCausalLM.from_pretrained(
-        model_name,
-        torch_dtype="auto",
-        device_map="auto"
-    )
-
     args = parse_args()
     huggingface_hub.login()
     wandb.login()
@@ -289,7 +271,7 @@ def main() -> None:
         max_tool_calling_iterations=args.max_turns,
         log_completions=True,
         num_completions_to_print=2,
-        chat_template_kwargs={"enable_thinking": False},
+        # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
 
@@ -318,8 +300,7 @@ def main() -> None:
     )
 
     trainer = AsyncGRPOTrainer(
-        model=model,
-        processing_class=tokenizer,
+        model=args.model_id,
         reward_funcs=[task_reward],
         train_dataset=dataset,
         args=grpo_config,
