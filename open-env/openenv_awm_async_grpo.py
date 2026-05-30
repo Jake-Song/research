@@ -236,6 +236,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--vllm-server-host", default="127.0.0.1")
     parser.add_argument("--vllm-server-port", type=int, default=8000)
+    parser.add_argument("--vllm-server-timeout", type=float, default=1200.0)
     parser.add_argument("--push-to-hub", action="store_true", default=True)
     parser.add_argument("--no-push-to-hub", dest="push_to_hub", action="store_false")
     parser.add_argument("--wandb-project", default="openenv-awm")
@@ -294,6 +295,10 @@ def main() -> None:
 
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
+        # How long the trainer waits on an empty rollout queue before stopping the
+        # epoch (also the vLLM-server-ready timeout). Rollouts hit the AWM env
+        # synchronously over multiple turns, so the default 240s can starve.
+        vllm_server_timeout=args.vllm_server_timeout,
 
         # Precision
         bf16=True,
