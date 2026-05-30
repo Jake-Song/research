@@ -248,11 +248,17 @@ def main() -> None:
     import wandb
 
     from transformers import AutoModelForCausalLM, AutoTokenizer
+    from trl.chat_template_utils import qwen3_chat_template
 
     model_name = "Qwen/Qwen3-4B-Thinking-2507"
 
     # load the tokenizer and the model
     tokenizer = AutoTokenizer.from_pretrained(model_name)
+    # Qwen3-4B-Thinking-2507 ships its own chat template, which doesn't byte-for-byte
+    # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
+    # would raise. Swap in TRL's bundled qwen3 template (same <tool_call> format, and
+    # qwen3_schema already parses <think>...</think>) so the schema is recognized.
+    tokenizer.chat_template = qwen3_chat_template
     model = AutoModelForCausalLM.from_pretrained(
         model_name,
         torch_dtype="auto",
