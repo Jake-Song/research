@@ -224,7 +224,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="Qwen3-4B-Thinking-2507-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=None)
+    parser.add_argument("--max-turns", type=int, default=3)
     parser.add_argument("--max-completion-length", type=int, default=1000)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
@@ -246,6 +246,18 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     import huggingface_hub
     import wandb
+
+    from transformers import AutoModelForCausalLM, AutoTokenizer
+
+    model_name = "Qwen/Qwen3-4B-Thinking-2507"
+
+    # load the tokenizer and the model
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype="auto",
+        device_map="auto"
+    )
 
     args = parse_args()
     huggingface_hub.login()
@@ -295,7 +307,8 @@ def main() -> None:
     )
 
     trainer = AsyncGRPOTrainer(
-        model=args.model_id,
+        model=model,
+        processing_class=tokenizer,
         reward_funcs=[task_reward],
         train_dataset=dataset,
         args=grpo_config,
