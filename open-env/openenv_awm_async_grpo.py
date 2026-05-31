@@ -267,6 +267,9 @@ def main() -> None:
     import huggingface_hub
     import wandb
 
+    from transformers import AutoTokenizer
+    from trl.chat_template_utils import qwen3_instruct_2507_chat_template
+
     args = parse_args()
     huggingface_hub.login()
     wandb.login()
@@ -279,6 +282,13 @@ def main() -> None:
     # tokenizer setup; we just swap the class before it calls AsyncRolloutWorker().
     from trl.experimental.async_grpo import async_grpo_trainer
     async_grpo_trainer.AsyncRolloutWorker = AWMRolloutWorker
+
+    # Qwen3-4B-Instruct-2507 ships its own chat template, which doesn't byte-for-byte
+    # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
+    # would raise. Swap in TRL's bundled qwen3-instruct-2507 template (same <tool_call>
+    # format) so the schema is recognized, and pass the tokenizer to the trainer.
+    tokenizer = AutoTokenizer.from_pretrained(args.model_id)
+    tokenizer.chat_template = qwen3_instruct_2507_chat_template
 
     grpo_config = AsyncGRPOConfig(
         # Training schedule / optimization
@@ -329,6 +339,7 @@ def main() -> None:
         reward_funcs=[task_reward],
         train_dataset=dataset,
         args=grpo_config,
+        processing_class=tokenizer,
         environment_factory=lambda: AWMEnvironment(args.env_url),
     )
 
