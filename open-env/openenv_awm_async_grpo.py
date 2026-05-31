@@ -43,6 +43,9 @@ Caveats:
 
 from __future__ import annotations
 
+import os
+os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
+
 import argparse
 import asyncio
 import json
@@ -244,7 +247,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=None)
-    parser.add_argument("--max-completion-length", type=int, default=1000)
+    parser.add_argument("--max-completion-length", type=int, default=1024)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
@@ -297,7 +300,7 @@ def main() -> None:
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
-        optim="adamw_torch",
+        optim="adamw_8bit",
         max_grad_norm=1.0,
 
         # GRPO configuration
