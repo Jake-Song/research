@@ -6,12 +6,14 @@ incomplete=0.1, format_error=-1.0). Because the reward only exists after a
 multi-turn rollout, this uses TRL's `AsyncGRPOTrainer` with an
 `environment_factory`: the trainer creates one `AWMEnvironment` per inflight
 slot, calls `reset(**row)` before each rollout, and exposes the env's public
-methods (`list_tools`, `call_tool`, `submit`) as native tool-calling tools. The
-worker drives the multi-turn loop and feeds tool results back automatically.
+methods (`list_tools`, `call_tool`) as native tool-calling tools. The worker
+drives the multi-turn loop and feeds tool results back automatically.
 
-Reward funcs don't receive the env instance, only the completion (which includes
-tool messages). So `submit` runs the AWM verifier and returns the reward as a
-JSON string; `task_reward` reads it back out of the `submit` tool message.
+Scoring is handled out-of-band by `AWMRolloutWorker`, a subclass of
+`AsyncRolloutWorker` that overrides `_generate_one` to call `_score_rollout`
+on the slot's env immediately after each rollout completes (while the env DB
+state is still valid). The reward is stored by completion identity and retrieved
+by `_verifier_reward`. The model never sees the reward — it is not a tool.
 
 Two-GPU cloud setup with vLLM serving + NCCL weight transfer:
 
@@ -42,10 +44,12 @@ Caveats:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 
 from datasets import Dataset
 from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
+from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker
 
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from agent_world_model_env import AWMEnv
@@ -59,7 +63,7 @@ have already logged in, and your user id is 1 if required.
 
 Use `list_tools` to discover the environment's available tools, then `call_tool` \
 to invoke a specific tool by name with its arguments. Call `list_tools` first. \
-When you have completed the task, call `submit` to finish and be evaluated."""
+When you have completed the task, stop calling tools."""
 
 
 # ---------------------------------------------------------------------------
@@ -105,7 +109,7 @@ class AWMEnvironment:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
         # The sql verifier's LLM judge is configured via OPENENV_AWM_LLM_* env
         # vars, which the env's reset() reads automatically.
-        self.env.reset(scenario=scenario, task_idx=task_idx, verifier_mode="sql")
+        self.env.reset(scenario=scenario, task_idx=task_idx, verifier_mode="code")
 
     def list_tools(self) -> str:
         """List the MCP tools available in the current environment.
@@ -139,24 +143,45 @@ class AWMEnvironment:
             text = json.dumps(obs.model_dump(), ensure_ascii=False)
         return text[:_MAX_TOOL_RESPONSE_CHARS]
 
-    def submit(self) -> str:
-        """Finish the task and run the verifier. Call this when you are done.
-
-        Returns:
-            A JSON string containing the verifier reward.
-        """
-        result: self.env.step(
-            CallToolAction(
-                tool_name="verify",
-                arguments={"verifier_mode": "code"},
-            )
-        )
-        reward_code = float(result.reward or 0.0)
-        result = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-        reward_sql = float(result.reward or 0.0)
-        reward = reward_code + reward_sql
+    def _score_rollout(self, final_answer: str) -> float:
+        """Run the verifier on the finished episode. Not exposed to the model."""
+        r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "code", "final_answer": final_answer}))
+        reward_code = float(r.reward or 0.0)
+        # r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
+        # reward_sql = float(r.reward or 0.0)
         self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
-        return json.dumps({"reward": reward})
+        return reward_code
+
+
+# ---------------------------------------------------------------------------
+# Rollout worker — scores each episode out-of-band, reward never in context
+# ---------------------------------------------------------------------------
+
+
+class AWMRolloutWorker(AsyncRolloutWorker):
+    """AsyncRolloutWorker subclass that scores AWM rollouts outside the model.
+
+    After each rollout completes (while the slot's env still holds the final
+    DB state), _generate_one calls env._score_rollout() and stores the reward
+    keyed by id(completion). _verifier_reward retrieves it at scoring time.
+    The model has no submit tool and never sees the reward value.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._rollout_rewards: dict[int, float] = {}
+        self.reward_funcs = [self._verifier_reward]
+        self.reward_func_names = ["task_reward"]
+
+    async def _generate_one(self, prompt, tool_dict):
+        out = await super()._generate_one(prompt, tool_dict)
+        completion = out[0]
+        env = tool_dict["call_tool"].__self__
+        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, completion)
+        return out
+
+    def _verifier_reward(self, completions, **kwargs):
+        return [self._rollout_rewards.pop(id(c), 0.0) for c in completions]
 
 
 # ---------------------------------------------------------------------------
@@ -198,18 +223,12 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
 
 
 def task_reward(completions, **kwargs):
-    """Reward = the AWM verifier reward returned by the `submit` tool."""
-    rewards = []
-    for completion in completions:
-        reward = 0.0
-        for msg in completion:
-            if msg.get("role") == "tool" and msg.get("name") == "submit":
-                try:
-                    reward = float(json.loads(msg["content"])["reward"])
-                except Exception:
-                    reward = 0.0
-        rewards.append(reward)
-    return rewards
+    """Placeholder reward func required by AsyncGRPOTrainer's constructor.
+
+    Actual scoring is done by AWMRolloutWorker._verifier_reward, which
+    replaces this in self.reward_funcs after the worker is constructed.
+    """
+    return [0.0] * len(completions)
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +273,12 @@ def main() -> None:
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
     dataset = build_dataset(args.env_url, args.dataset_size)
+
+    # Point the trainer at our subclass so it instantiates AWMRolloutWorker
+    # instead of the base. The trainer still handles all weight-metadata and
+    # tokenizer setup; we just swap the class before it calls AsyncRolloutWorker().
+    from trl.experimental.async_grpo import async_grpo_trainer
+    async_grpo_trainer.AsyncRolloutWorker = AWMRolloutWorker
 
     grpo_config = AsyncGRPOConfig(
         # Training schedule / optimization
