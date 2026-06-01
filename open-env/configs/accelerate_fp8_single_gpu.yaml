@@ -1,0 +1,38 @@
+# Accelerate config for SINGLE-GPU FP8 training (no FSDP).
+#
+# Use when exactly ONE GPU runs the trainer (the vLLM server lives on a separate
+# GPU and does not count here). No sharding -> no FSDP needed.
+#
+# FP8 still comes from mixed_precision=fp8 + the torchao "AO" backend.
+# Note: enable_fsdp_float8_all_gather is GONE (it's FSDP-only).
+#
+# Hardware: still requires FP8 tensor cores (Hopper/Ada/Blackwell).
+#
+# Launch:
+#   CUDA_VISIBLE_DEVICES=1 accelerate launch \
+#     --config_file accelerate_fp8_single_gpu.yaml train_async_grpo.py ...
+
+compute_environment: LOCAL_MACHINE
+distributed_type: 'NO'      # single process, no sharding
+machine_rank: 0
+num_machines: 1
+num_processes: 1            # exactly one training GPU
+mixed_precision: fp8
+
+# ---- FP8 (torchao / "ao" backend) ----
+fp8_config:
+  backend: AO
+  pad_inner_dim: true       # pad K/N to multiples of 16 for the fp8 kernels
+
+# ---- torch.compile (where most of the fp8 speedup comes from) ----
+dynamo_config:
+  dynamo_backend: INDUCTOR
+  dynamo_use_regional_compilation: true
+
+downcast_bf16: 'no'
+enable_cpu_affinity: false
+rdzv_backend: static
+same_network: true
+tpu_use_cluster: false
+tpu_use_sudo: false
+use_cpu: false
