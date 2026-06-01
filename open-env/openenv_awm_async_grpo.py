@@ -112,7 +112,14 @@ class AWMEnvironment:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
         # The sql verifier's LLM judge is configured via OPENENV_AWM_LLM_* env
         # vars, which the env's reset() reads automatically.
-        self.env.reset(scenario=scenario, task_idx=task_idx, verifier_mode="code")
+        self.env.reset(
+            scenario=scenario, 
+            task_idx=task_idx, 
+            verifier_mode="sql", 
+            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"), 
+            llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"), 
+            llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
+        )
 
     def list_tools(self) -> str:
         """List the MCP tools available in the current environment.
@@ -150,10 +157,10 @@ class AWMEnvironment:
         """Run the verifier on the finished episode. Not exposed to the model."""
         r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "code", "final_answer": final_answer}))
         reward_code = float(r.reward or 0.0)
-        # r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-        # reward_sql = float(r.reward or 0.0)
+        r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
+        reward_sql = float(r.reward or 0.0)
         self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
-        return reward_code
+        return reward_code + reward_sql
 
 
 # ---------------------------------------------------------------------------
