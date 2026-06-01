@@ -15,21 +15,24 @@ on the slot's env immediately after each rollout completes (while the env DB
 state is still valid). The reward is stored by completion identity and retrieved
 by `_verifier_reward`. The model never sees the reward — it is not a tool.
 
-Two-GPU cloud setup with vLLM serving + NCCL weight transfer:
+Eight-GPU cloud setup: 1 vLLM inference GPU + 7 FSDP2 trainer GPUs, with NCCL
+weight transfer. The rollout worker only runs on rank 0, so the 7 trainer ranks
+share the single vLLM server. See open-env/scripts/run_vllm_awm.sh and
+open-env/scripts/run_trainer_awm.sh; the trainer launch uses the FSDP2 accelerate
+config at open-env/configs/fsdp2.yaml.
 
     # Terminal 1 - AWM env server on CPU (or set --env-url to a hosted HF Space)
     PYTHONPATH=src:envs uv run uvicorn \
       envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899
 
     # Terminal 2 - vLLM server on GPU 0
-    CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
-      uv run vllm serve Qwen/Qwen3-4B-Instruct-2507 \
-        --max-model-len 45000 \
-        --logprobs-mode processed_logprobs \
-        --weight-transfer-config '{"backend":"nccl"}'
+    bash open-env/scripts/run_vllm_awm.sh
 
-    # Terminal 3 - trainer on GPU 1 (sql verifier needs an LLM judge)
+    # Terminal 3 - 7 FSDP2 trainers on GPUs 1-7 (sql verifier needs an LLM judge)
     export OPENENV_AWM_LLM_BASE_URL=... OPENENV_AWM_LLM_API_KEY=... OPENENV_AWM_LLM_MODEL=...
+    bash open-env/scripts/run_trainer_awm.sh --env-url http://localhost:8899
+
+A single trainer GPU still works via:
     CUDA_VISIBLE_DEVICES=1 uv run accelerate launch open-env/openenv_awm_async_grpo.py \
       --env-url http://localhost:8899
 
@@ -258,6 +261,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=1e-6)
+    parser.add_argument("--optim", default="adamw_torch")
     parser.add_argument("--warmup-steps", type=int, default=10)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--save-steps", type=int, default=10)
@@ -307,7 +311,7 @@ def main() -> None:
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=args.per_device_batch_size,
         warmup_steps=args.warmup_steps,
-        optim="adamw_8bit",
+        optim=args.optim,
         max_grad_norm=1.0,
 
         # GRPO configuration
