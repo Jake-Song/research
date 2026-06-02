@@ -109,7 +109,9 @@ class AWMEnvironment:
     """AWM env exposed to AsyncGRPOTrainer as a set of tool-calling tools."""
 
     def __init__(self, env_url: str):
-        self.env = AWMEnv(base_url=env_url).sync()
+        # Default message_timeout_s is 60s; the sql verifier's LLM judge can take
+        # longer, so bump it to avoid spurious TimeoutErrors during scoring.
+        self.env = AWMEnv(base_url=env_url, message_timeout_s=300.0).sync()
 
     def reset(self, scenario: str, task_idx: int, **kwargs) -> None:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
@@ -157,13 +159,22 @@ class AWMEnvironment:
         return text[:_MAX_TOOL_RESPONSE_CHARS]
 
     def _score_rollout(self, final_answer: str) -> float:
-        """Run the verifier on the finished episode. Not exposed to the model."""
-        r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "code", "final_answer": final_answer}))
-        reward_code = float(r.reward or 0.0)
-        r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-        reward_sql = float(r.reward or 0.0)
-        self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
-        return reward_code + reward_sql
+        """Run the verifier on the finished episode. Not exposed to the model.
+
+        A scoring failure (e.g. the LLM judge timing out) must not crash the
+        rollout worker — _generate_loop re-raises any task exception — so on
+        error we return 0.0 and always close the session.
+        """
+        try:
+            r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "code", "final_answer": final_answer}))
+            reward_code = float(r.reward or 0.0)
+            r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
+            reward_sql = float(r.reward or 0.0)
+            return reward_code + reward_sql
+        except Exception:
+            return 0.0
+        finally:
+            self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
 
 
 # ---------------------------------------------------------------------------
@@ -190,7 +201,13 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         out = await super()._generate_one(prompt, tool_dict)
         completion = out[0]
         env = tool_dict["call_tool"].__self__
-        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, completion)
+        # completion is a list of message dicts; the final answer is the content
+        # of the last assistant turn (the one that stopped calling tools).
+        final_answer = next(
+            (m.get("content", "") for m in reversed(completion) if m.get("role") == "assistant"),
+            "",
+        )
+        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
         return out
 
     def _verifier_reward(self, completions, **kwargs):
