@@ -305,6 +305,7 @@ def main() -> None:
     tokenizer.chat_template = qwen3_instruct_2507_chat_template
 
     grpo_config = AsyncGRPOConfig(
+        model_init_kwargs={"attn_implementation": "flash-attn3"},
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
