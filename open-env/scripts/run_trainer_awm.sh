@@ -6,5 +6,5 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 CUDA_VISIBLE_DEVICES=1 \
     uv run accelerate launch \
-        --config_file ../config/accelerate_fp8_single_gpu.yaml \
+        --config_file "$REPO_ROOT/open-env/configs/accelerate_fp8_single_gpu.yaml" \
         "$REPO_ROOT/open-env/openenv_awm_async_grpo.py" "$@"
