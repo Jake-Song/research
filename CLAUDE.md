@@ -24,3 +24,4 @@ Skills are defined in `.claude/skills/` and run inline:
 - Current skills:
   - `read-arxiv-paper`: Use when asked to read or summarize an arXiv paper from an arXiv URL.
   - `bootstrap-llm-experiment`: Use when asked to bootstrap/scaffold a new local LLM inference experiment as a top-level dir.
+  - `hf-jobs`: Use to quickly run/iterate a one-off compute experiment on Hugging Face Jobs (`hf jobs` CLI).
