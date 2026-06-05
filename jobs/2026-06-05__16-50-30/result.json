@@ -1,0 +1,49 @@
+{
+    "id": "3382f716-05cb-472c-88fe-9e5a01e98414",
+    "started_at": "2026-06-05T16:50:37.700820",
+    "updated_at": "2026-06-05T08:01:52.294682Z",
+    "finished_at": null,
+    "n_total_trials": 89,
+    "stats": {
+        "n_completed_trials": 8,
+        "n_errored_trials": 4,
+        "n_running_trials": 0,
+        "n_pending_trials": 81,
+        "n_cancelled_trials": 4,
+        "n_retries": 0,
+        "evals": {
+            "terminus-2__claude-haiku-4-5__terminal-bench": {
+                "n_trials": 4,
+                "n_errors": 4,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {
+                    "reward": {
+                        "0.0": [
+                            "break-filter-js-from-html__T3EE5HN",
+                            "reshard-c4-data__GPMWhJT",
+                            "llm-inference-batching-scheduler__BmAnqyh",
+                            "gpt2-codegolf__ZMBeADg"
+                        ]
+                    }
+                },
+                "exception_stats": {
+                    "CancelledError": [
+                        "merge-diff-arc-agi-task__8s2whoe",
+                        "write-compressor__y37jKbr",
+                        "log-summary-date-ranges__GThaysv",
+                        "winning-avg-corewars__QYM6qGW"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": 3011689,
+        "n_cache_tokens": 2740556,
+        "n_output_tokens": 106651,
+        "cost_usd": 1.1335501
+    }
+}

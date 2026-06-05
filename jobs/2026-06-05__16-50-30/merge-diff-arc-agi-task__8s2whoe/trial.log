@@ -1,0 +1,15 @@
+Skipping image OS validation for alexgshaw/merge-diff-arc-agi-task:20251031: docker inspect returned 1
+Parser warnings: - Extra text detected before JSON object
+- Extra text detected after JSON object
+Trajectory dumped to jobs/2026-06-05__16-50-30/merge-diff-arc-agi-task__8s2whoe/agent/trajectory.json
+Parser warnings: - Extra text detected before JSON object
+- Extra text detected after JSON object
+Trajectory dumped to jobs/2026-06-05__16-50-30/merge-diff-arc-agi-task__8s2whoe/agent/trajectory.json
+Parser warnings: - Extra text detected before JSON object
+- Extra text detected after JSON object
+Trajectory dumped to jobs/2026-06-05__16-50-30/merge-diff-arc-agi-task__8s2whoe/agent/trajectory.json
+Parser warnings: - Extra text detected before JSON object
+- Extra text detected after JSON object
+Trajectory dumped to jobs/2026-06-05__16-50-30/merge-diff-arc-agi-task__8s2whoe/agent/trajectory.json
+Trial merge-diff-arc-agi-task__8s2whoe cancelled
+Cleanup interrupted for merge-diff-arc-agi-task__8s2whoe, but agent environment stop is shielded and will complete

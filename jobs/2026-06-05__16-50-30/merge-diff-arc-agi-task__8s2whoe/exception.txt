@@ -1,0 +1,40 @@
+Traceback (most recent call last):
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 292, in run
+    await self._run()
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 33, in _run
+    await self._run_agent()
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/single_step.py", line 63, in _run_agent
+    await self._run_agent_phase(
+    ...<4 lines>...
+    )
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/trial/trial.py", line 376, in _run_agent_phase
+    await asyncio.wait_for(
+    ...<6 lines>...
+    )
+  File "/home/jake/.local/share/uv/python/cpython-3.13.8-linux-x86_64-gnu/lib/python3.13/asyncio/tasks.py", line 507, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/terminus_2/terminus_2.py", line 1587, in run
+    await self._run_agent_loop(
+    ...<3 lines>...
+    )
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/terminus_2/terminus_2.py", line 1381, in _run_agent_loop
+    timeout_occurred, terminal_output = await self._execute_commands(
+                                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<2 lines>...
+    )
+    ^
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/terminus_2/terminus_2.py", line 1199, in _execute_commands
+    await session.send_keys(
+    ...<3 lines>...
+    )
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/terminus_2/tmux_session.py", line 668, in send_keys
+    await self._send_non_blocking_keys(
+    ...<2 lines>...
+    )
+  File "/home/jake/.local/share/uv/tools/harbor/lib/python3.13/site-packages/harbor/agents/terminus_2/tmux_session.py", line 628, in _send_non_blocking_keys
+    await asyncio.sleep(min_timeout_sec - elapsed_time_sec)
+  File "/home/jake/.local/share/uv/python/cpython-3.13.8-linux-x86_64-gnu/lib/python3.13/asyncio/tasks.py", line 718, in sleep
+    return await future
+           ^^^^^^^^^^^^
+asyncio.exceptions.CancelledError
