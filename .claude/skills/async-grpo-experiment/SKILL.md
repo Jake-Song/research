@@ -26,10 +26,10 @@ Reused as-is (don't rewrite the training logic):
 
 - **You are on the GPU node.** Run `nvidia-smi --query-gpu=index,name --format=csv,noheader`. If `nvidia-smi` is missing or shows 0 GPUs, STOP — this skill must run on the provisioned cloud box (where `startup.sh` installed claude), not the laptop. Tell the user to invoke it there.
 - **GPU count → topology.** GPU 0 is always vLLM. The rest are trainers. 8 GPUs → 1 vLLM + 7 trainers (`fsdp2.yaml`). If there are exactly 2 GPUs, use the single-GPU trainer path. Set the trainer `num_processes` to `GPU count − 1`; edit `fsdp2.yaml`'s `num_processes` only if the count differs from 7.
-- **Repo provisioned.** Confirm sibling clones exist: `../trl` (on the `AsyncGRPO` branch) and `../OpenEnv`. If missing, run `bash startup.sh` then `bash open-env/scripts/install_packages.sh` (from `open-env/`). Skip reinstall if `uv run python -c "import trl.experimental.async_grpo"` already succeeds.
+- **Repo provisioned.** Confirm sibling clones exist: `../trl` (on the `AsyncGRPO` branch) and `../OpenEnv`, and that `uv run python -c "import trl.experimental.async_grpo"` succeeds. If anything is missing, STOP and tell the user to provision/install it themselves — do not run `startup.sh`, `install_packages.sh`, or any package install.
 - **P2P / NCCL.** Run `bash check_gpu_p2p.sh`. Weight transfer from trainers → vLLM rides NCCL P2P; if the functional P2P test fails, the run hangs at the first weight sync. Surface this before launching rather than letting it hang.
 - **Verifier LLM judge env vars.** The SQL verifier needs an external judge: `OPENENV_AWM_LLM_BASE_URL`, `OPENENV_AWM_LLM_API_KEY`, `OPENENV_AWM_LLM_MODEL`. Confirm all three are set. If unset, ask the user — don't launch without them or every reward is broken.
-- **Logging/hub auth.** Push-to-hub defaults **on**: ensure `hf auth whoami` works, or pass `--no-push-to-hub`. For wandb, ensure it's logged in (or `WANDB_API_KEY` is set); otherwise export `WANDB_MODE=offline` so the run doesn't block on a prompt.
+- **Logging.** Pass `--no-push-to-hub` so the run never blocks on hub auth (the user handles any HF login themselves). For wandb, ensure it's logged in (or `WANDB_API_KEY` is set); otherwise export `WANDB_MODE=offline` so the run doesn't block on a prompt.
 
 ### Part 1: Create the experiment branch
 
