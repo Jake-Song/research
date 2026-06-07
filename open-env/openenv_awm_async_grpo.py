@@ -401,7 +401,8 @@ def main() -> None:
         importance_sampling_level="sequence",
         loss_type="grpo",
         epsilon_high=0.28,  # DAPO-style high clip for more exploration
-        beta=0.001,         # KL coefficient (TRL default is 0.0, i.e. no KL)
+        # No KL penalty: the async trainer has no reference model, and old_log_probs
+        # are vLLM sampling logprobs, not reference logprobs. GSPO with beta=0.
         log_completions=True,
         num_completions_to_print=2,
         # chat_template_kwargs={"enable_thinking": False},

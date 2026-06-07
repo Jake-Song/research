@@ -14,6 +14,7 @@ if ! grep -q 'UV_CACHE_DIR="/workspace/.cache/uv"' ~/.bashrc 2>/dev/null; then
 fi
 mkdir -p "$UV_CACHE_DIR"
 
+cd ..
 git clone https://github.com/Jake-Song/trl.git
 cd trl
 git checkout AsyncGRPO
