@@ -1,6 +1,6 @@
 ---
 name: async-grpo-experiment
-description: Use this skill to auto-run an async-GRPO training experiment on the provisioned GPU cloud node — e.g. "run an AWM async GRPO experiment", "launch a training run on the 8-GPU rig", "train Qwen3-4B on AWM and report". It makes a fresh git branch for the run, brings up the 3-process stack (AWM env server + vLLM + FSDP2 trainers), smoke-tests it, runs a fixed 10-step training run, monitors reward/logs, and writes a results note. Runs ON the GPU node, not the laptop.
+description: Use this skill to auto-run an async-GRPO training experiment on the provisioned GPU cloud node — e.g. "run an AWM async GRPO experiment", "launch a training run on the 8-GPU rig", "train Qwen3-4B on AWM and report". It makes a fresh git branch for the run, brings up the 3-process stack (AWM env server + vLLM + FSDP2 trainers), smoke-tests it, runs a two-phase training run (12 steps, then on to 24 steps total), monitors reward/logs, and writes a results note. Runs ON the GPU node, not the laptop.
 ---
 
 You autonomously run one async-GRPO training experiment **on the provisioned GPU cloud node** and report on it. The stack is three cooperating processes with NCCL weight transfer:
@@ -9,11 +9,11 @@ You autonomously run one async-GRPO training experiment **on the provisioned GPU
 2. **vLLM server** (GPU 0, port 8000) — generates rollouts, receives trainer weights over NCCL.
 3. **FSDP2 trainers** (GPUs 1–N) — `AsyncGRPOTrainer`; rank 0 drives the rollout worker.
 
-The single object of study is the training run. **Do not** rewrite the trainer or build an eval harness — reuse the existing files. Your job is: branch, bring the stack up in order, verify it, run **exactly 10 steps**, babysit, and write up what happened.
+The single object of study is the training run. **Do not** rewrite the trainer or build an eval harness — reuse the existing files. Your job is: branch, bring the stack up in order, verify it, run **two phases — 12 steps, then on to 24 steps total** — babysit, and write up what happened.
 
 Two standing rules for this rig:
 - **Every experiment runs on its own git branch** (never on `main`). One branch per run.
-- **Every experiment trains for exactly 10 optimizer steps** (`max_steps=10`). Fast-iteration default; do not run longer unless the user explicitly overrides.
+- **Every experiment trains in two phases on one branch: a 12-step phase, then continuing to 24 optimizer steps total** (`max_steps=24`, with a checkpoint + monitoring read at step 12). Do not change these step counts unless the user explicitly overrides.
 
 Reused as-is (don't rewrite the training logic):
 - Trainer: `open-env/openenv_awm_async_grpo.py`
@@ -38,8 +38,8 @@ From a clean tree on `main`, create and check out a fresh branch for this run �
 ### Part 2: Resolve the experiment
 
 - Default target is the **AWM** async-GRPO run (`openenv_awm_async_grpo.py`). Only deviate if the user names a different `openenv_*_async_grpo.py` script.
-- **Step count is fixed at 10.** Launch with `max_steps=10`. The trainer has no `--max-steps` flag yet — add one: an argparse line (`--max-steps`, type int, default 10) and pass `max_steps=args.max_steps` into the `AsyncGRPOConfig(...)`. This is a small, necessary wiring change and it lives on the experiment branch. Do not instead try to back into 10 steps via `dataset_size`/epochs — `max_steps` is exact.
-- Other knobs are CLI flags (`--dataset-size`, `--num-generations`, `--learning-rate`, `--gradient-accumulation-steps`, `--max-completion-length`, `--save-steps`, `--wandb-name`, `--output-dir`, `--no-push-to-hub`, …). Use the user's specified knobs; otherwise the defaults from `experiment/awm_transfer_experiment_plan.md` (Qwen3-4B, `num_generations=8`, `max_completion_length=1024`, `grad_accum=16`, `lr=1e-6`, `dataset_size=1000`). Set `--save-steps` so a checkpoint lands within 10 steps (e.g. `--save-steps 5`). State the final config back to the user.
+- **Step count is two-phase: 12 then 24.** Run a single trainer invocation to `max_steps=24` with a checkpoint at step 12 (see `--save-steps` below), and treat step 12 as the phase-1 monitoring/report milestone and step 24 as phase-2. The trainer has no `--max-steps` flag yet — add one: an argparse line (`--max-steps`, type int, default 24) and pass `max_steps=args.max_steps` into the `AsyncGRPOConfig(...)`. This is a small, necessary wiring change and it lives on the experiment branch. Do not instead try to back into the step counts via `dataset_size`/epochs — `max_steps` is exact.
+- Other knobs are CLI flags (`--dataset-size`, `--num-generations`, `--learning-rate`, `--gradient-accumulation-steps`, `--max-completion-length`, `--save-steps`, `--wandb-name`, `--output-dir`, `--no-push-to-hub`, …). Use the user's specified knobs; otherwise the defaults from `experiment/awm_transfer_experiment_plan.md` (Qwen3-4B, `num_generations=8`, `max_completion_length=1024`, `grad_accum=16`, `lr=1e-6`, `dataset_size=1000`). Set `--save-steps 12` so checkpoints land at step 12 (end of phase 1) and step 24 (end of phase 2). State the final config back to the user.
 - Use a unique `--wandb-name` / `--output-dir` (match the branch name) so you don't clobber a prior run.
 
 ### Part 3: Bring up the stack (tmux, ordered)
@@ -52,15 +52,15 @@ Use a tmux session (`tmux new-session -d -s grpo`) with one window per process s
 2. **vLLM** (GPU 0): `bash open-env/scripts/run_vllm_awm.sh`.
    Health gate: poll `curl -fs http://localhost:8000/health` until 200 (weight load takes minutes). Do **not** start the trainer before vLLM is serving.
 3. **Trainers** (GPUs 1–N), from repo root:
-   - Multi-GPU: `CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 uv run accelerate launch --config_file open-env/configs/fsdp2.yaml open-env/openenv_awm_async_grpo.py --env-url http://localhost:8899 --max-steps 10 [flags]`
-   - 2-GPU debug: `bash open-env/scripts/run_trainer_awm.sh --env-url http://localhost:8899 --max-steps 10 [flags]`
+   - Multi-GPU: `CUDA_VISIBLE_DEVICES=1,2,3,4,5,6,7 uv run accelerate launch --config_file open-env/configs/fsdp2.yaml open-env/openenv_awm_async_grpo.py --env-url http://localhost:8899 --max-steps 24 --save-steps 12 [flags]`
+   - 2-GPU debug: `bash open-env/scripts/run_trainer_awm.sh --env-url http://localhost:8899 --max-steps 24 --save-steps 12 [flags]`
    (Adjust the `CUDA_VISIBLE_DEVICES` list and `fsdp2.yaml num_processes` to the actual trainer count.)
 
 ### Part 4: Smoke gate (first step or two)
 
-A 10-step run is already smoke-scale, so don't do a separate throwaway run — just watch the first 1–2 steps of the real run and confirm: env reachable, vLLM generates, the **first NCCL weight sync completes** (doesn't hang), and a **non-degenerate reward** appears (not all `format_error`/−1.0). If it hangs at weight sync, kill it and revisit P2P (Part 0). Once the first steps look sane, let it run to 10.
+Even a 24-step run is small, so don't do a separate throwaway run — just watch the first 1–2 steps of the real run and confirm: env reachable, vLLM generates, the **first NCCL weight sync completes** (doesn't hang), and a **non-degenerate reward** appears (not all `format_error`/−1.0). If it hangs at weight sync, kill it and revisit P2P (Part 0). Once the first steps look sane, let it run on toward the phase-1 milestone at step 12.
 
-### Part 5: Run + monitor the 10 steps
+### Part 5: Run + monitor the two phases (12 → 24 steps)
 
 - Tail the trainer tmux window and watch wandb (`openenv-awm` project): **mean reward**, the reward-by-label fractions (Completed / Partial / Failed / format-error), and **mean turns per rollout**.
 - Throughput is **env-server bottlenecked**, not GPU — rollouts hit the AWM env synchronously over multiple turns, so steps are slow and low GPU util is expected, not a bug.
@@ -70,16 +70,16 @@ A 10-step run is already smoke-scale, so don't do a separate throwaway run — j
   - **OOM** on a trainer → lower `max_completion_length` or `per_device_batch_size`.
   - **Degenerate reward** (all format-error / stuck) → check env-server logs and the judge env vars.
   If a process dies, capture the tail of its tmux pane, diagnose, and either fix-and-relaunch or report the blocker. Don't silently restart in a loop.
-- Stop at step 10 (the `max_steps` cap handles this).
+- **Two phases, one continuous run.** At **step 12** (end of phase 1) a checkpoint lands — pause to take a phase-1 read (mean reward, reward-by-label fractions, mean turns) before letting it carry on. The run then continues to **step 24** (end of phase 2), where the final checkpoint lands and the `max_steps=24` cap stops it. Capture a monitoring read at each milestone (step 12 and step 24) for the report, and note whether continuing 12→24 helped, flattened, or hurt.
 
 ### Part 6: Report
 
 Write a markdown results note to `experiment/<run-name>_results.md` (style of the existing `experiment/*.md`), then commit it on the experiment branch:
-- **Config**: exact flags (incl. `max_steps=10`), GPU topology (vLLM + N trainers), model, dataset size.
+- **Config**: exact flags (incl. `max_steps=24`, `save_steps=12` for the two-phase 12→24 schedule), GPU topology (vLLM + N trainers), model, dataset size.
 - **Smoke gate**: pass/fail + what the first steps confirmed.
-- **Training summary**: final & best mean reward over the 10 steps, the reward-by-label trend, mean turns, and the curve shape (rising / flat / collapsed). With only 10 steps, frame this as a sanity/early-signal read, not a converged result.
-- **Artifacts**: wandb run URL, checkpoint `output_dir` (and hub repo if pushed), the branch name.
+- **Training summary (per phase)**: report the phase-1 read at step 12 and the phase-2 read at step 24 separately — final & best mean reward, the reward-by-label trend, mean turns, and the curve shape (rising / flat / collapsed) across the 24 steps — and call out whether continuing 12→24 helped, flattened, or hurt. With only 24 steps, frame this as a sanity/early-signal read, not a converged result.
+- **Artifacts**: wandb run URL, checkpoint `output_dir` (both the step-12 and step-24 checkpoints, and hub repo if pushed), the branch name.
 - **Anomalies**: any crashes, restarts, timeouts, P2P issues — with the cause.
-- **Read** (1–3 sentences): did the stack train cleanly for 10 steps, and is it worth a longer run / eval per `experiment/awm_transfer_experiment_plan.md`?
+- **Read** (1–3 sentences): did the stack train cleanly through both phases (to 24 steps), and is it worth a longer run / eval per `experiment/awm_transfer_experiment_plan.md`?
 
 Finish with `git add experiment/<run-name>_results.md && git commit` on the branch, then tell the user the branch name, where the note and checkpoints are, and the one-line verdict.
