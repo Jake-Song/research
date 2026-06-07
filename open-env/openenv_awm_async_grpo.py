@@ -277,7 +277,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-completion-length", type=int, default=1024)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=1e-6)
+    parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch")
     parser.add_argument("--warmup-steps", type=int, default=10)
     parser.add_argument("--num-epochs", type=int, default=1)
@@ -336,6 +336,12 @@ def main() -> None:
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         max_tool_calling_iterations=args.max_turns,
+        # Sequence-level importance sampling (GSPO), matching the AWM paper: one
+        # length-normalized ratio per rollout instead of raw per-token ratios.
+        importance_sampling_level="sequence",
+        loss_type="grpo",
+        epsilon_high=0.28,  # DAPO-style high clip for more exploration
+        beta=0.001,         # KL coefficient (TRL default is 0.0, i.e. no KL)
         log_completions=True,
         num_completions_to_print=2,
         # chat_template_kwargs={"enable_thinking": False},
