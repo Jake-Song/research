@@ -158,7 +158,7 @@ class AWMEnvironment:
             text = json.dumps(obs.model_dump(), ensure_ascii=False)
         return text[:_MAX_TOOL_RESPONSE_CHARS]
 
-    def _score_rollout(self, final_answer: str) -> float:
+    def _score_rollout(self) -> float:
         """Run the verifier on the finished episode. Not exposed to the model.
 
         A scoring failure (e.g. the LLM judge timing out) must not crash the
@@ -166,11 +166,8 @@ class AWMEnvironment:
         error we return 0.0 and always close the session.
         """
         try:
-            r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "code", "final_answer": final_answer}))
-            reward_code = float(r.reward or 0.0)
             r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-            reward_sql = float(r.reward or 0.0)
-            return reward_code + reward_sql
+            return float(r.reward or 0.0)
         except Exception:
             return 0.0
         finally:
@@ -201,13 +198,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         out = await super()._generate_one(prompt, tool_dict)
         completion = out[0]
         env = tool_dict["call_tool"].__self__
-        # completion is a list of message dicts; the final answer is the content
-        # of the last assistant turn (the one that stopped calling tools).
-        final_answer = next(
-            (m.get("content", "") for m in reversed(completion) if m.get("role") == "assistant"),
-            "",
-        )
-        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
+        
+        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout)
         return out
 
     def _verifier_reward(self, completions, **kwargs):
