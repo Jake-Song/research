@@ -37,3 +37,5 @@ Skills are defined in `.claude/skills/` and run inline:
   - `read-arxiv-paper`: Use when asked to read or summarize an arXiv paper from an arXiv URL.
   - `bootstrap-llm-experiment`: Use when asked to bootstrap/scaffold a new local LLM inference experiment as a top-level dir.
   - `hf-jobs`: Use to quickly run/iterate a one-off compute experiment on Hugging Face Jobs (`hf jobs` CLI).
+  - `async-grpo-experiment`: Use to auto-run an async-GRPO training run ON the GPU node (two-phase 12→24 steps).
+  - `runpod-remote-grpo`: Use to provision a remote RunPod GPU pod from the laptop and hand off to `async-grpo-experiment`.
