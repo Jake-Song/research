@@ -245,12 +245,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
-                final_answer = next(
-                    (m.get("content", "") for m in reversed(completion) if m.get("role") == "assistant"),
-                    "",
-                )
                 try:
-                    self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
+                    self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout)
                 except RuntimeError:
                     # The worker loop is shutting down (its default executor is closed,
                     # so to_thread can't submit) — typically at a worker stop/restart or
