@@ -54,6 +54,7 @@ import asyncio
 import json
 
 from datasets import Dataset
+from trl.chat_template_utils import parse_response
 from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
 from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker
 
@@ -104,6 +105,11 @@ def format_tools(tools) -> str:
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
 
+# reward_type strings the AWM env assigns to tool-call format violations
+# (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
+# The paper terminates the rollout with r_t = -1.0 on any such violation.
+_FORMAT_ERROR_REWARD_TYPES = {"tool_not_found", "invalid_args", "invalid_action"}
+
 
 class AWMEnvironment:
     """AWM env exposed to AsyncGRPOTrainer as a set of tool-calling tools."""
@@ -112,17 +118,21 @@ class AWMEnvironment:
         # Default message_timeout_s is 60s; the sql verifier's LLM judge can take
         # longer, so bump it to avoid spurious TimeoutErrors during scoring.
         self.env = AWMEnv(base_url=env_url, message_timeout_s=300.0).sync()
+        # Set by call_tool when a tool call hits a format violation; the rollout
+        # worker checks it to early-terminate the rollout with reward -1.0.
+        self.format_violation = False
 
     def reset(self, scenario: str, task_idx: int, **kwargs) -> None:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
         # The sql verifier's LLM judge is configured via OPENENV_AWM_LLM_* env
         # vars, which the env's reset() reads automatically.
+        self.format_violation = False
         self.env.reset(
-            scenario=scenario, 
-            task_idx=task_idx, 
-            verifier_mode="sql", 
-            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"), 
-            llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"), 
+            scenario=scenario,
+            task_idx=task_idx,
+            verifier_mode="sql",
+            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
+            llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
             llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
         )
 
@@ -149,6 +159,8 @@ class AWMEnvironment:
             arguments = {}
         result = self.env.step(CallToolAction(tool_name=tool_name, arguments=arguments))
         obs = result.observation
+        if getattr(obs, "reward_type", None) in _FORMAT_ERROR_REWARD_TYPES:
+            self.format_violation = True
         if getattr(obs, "tool_result", None) is not None:
             tool_result = obs.tool_result
             text = tool_result if isinstance(tool_result, str) else json.dumps(tool_result, ensure_ascii=False)
@@ -161,6 +173,11 @@ class AWMEnvironment:
     def _score_rollout(self) -> float:
         """Run the verifier on the finished episode. Not exposed to the model.
 
+        Uses the "sql" verifier only — the code-augmented LLM-as-Judge that the
+        AWM paper defines as the single outcome reward R_τ ∈ {1.0, 0.1, 0.0}.
+        (Pure "code" verification is deliberately excluded: the paper shows it
+        produces false negatives on partial/transient executions.)
+
         A scoring failure (e.g. the LLM judge timing out) must not crash the
         rollout worker — _generate_loop re-raises any task exception — so on
         error we return 0.0 and always close the session.
@@ -171,7 +188,11 @@ class AWMEnvironment:
         except Exception:
             return 0.0
         finally:
-            self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
+            self.close_session()
+
+    def close_session(self) -> None:
+        """End the episode without running the verifier (used by early-terminate)."""
+        self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
 
 
 # ---------------------------------------------------------------------------
@@ -195,12 +216,67 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self.reward_func_names = ["task_reward"]
 
     async def _generate_one(self, prompt, tool_dict):
-        out = await super()._generate_one(prompt, tool_dict)
-        completion = out[0]
+        # Reimplements AsyncRolloutWorker._generate_one's multi-turn loop so we can
+        # early-terminate on a tool-call format violation (the base loop has no such
+        # hook and would otherwise run every turn to completion). On the first
+        # format error we keep the partial completion and force reward -1.0, matching
+        # the AWM paper's step-level rule; otherwise we score normally via the judge.
         env = tool_dict["call_tool"].__self__
-        
-        self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout)
-        return out
+        completion, completion_ids, completion_logprobs, tool_mask = [], [], [], []
+        tool_call_count = 0
+        tool_failure_count = 0
+        iteration_num = 0
+        max_iterations = self.max_tool_calling_iterations
+        prompt_ids = self.tokenizer.apply_chat_template(
+            prompt,
+            return_dict=False,
+            add_generation_prompt=True,
+            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+            chat_template=self.chat_template,
+            **self.chat_template_kwargs,
+        )
+        while True:
+            turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
+            assistant_message = parse_response(self.tokenizer, turn_ids)
+            completion.append(assistant_message)
+            completion_ids.extend(turn_ids)
+            completion_logprobs.extend(turn_logprobs)
+            tool_mask.extend([1] * len(turn_ids))
+            tool_calls = assistant_message.get("tool_calls")
+            if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
+                # Normal termination: score the finished episode with the LLM judge.
+                final_answer = next(
+                    (m.get("content", "") for m in reversed(completion) if m.get("role") == "assistant"),
+                    "",
+                )
+                try:
+                    self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
+                except RuntimeError:
+                    # The worker loop is shutting down (its default executor is closed,
+                    # so to_thread can't submit) — typically at a worker stop/restart or
+                    # phase boundary while this rollout is still in flight. The reward is
+                    # discarded at teardown anyway; swallow it so the worker isn't marked
+                    # failed and check_health doesn't abort the whole run.
+                    self._rollout_rewards[id(completion)] = 0.0
+                return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
+
+            tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
+            tool_call_count += n_calls
+            tool_failure_count += n_failures
+            completion.extend(tool_messages)
+            suffix_ids = self._get_tool_suffix_ids(tool_messages)
+            completion_ids.extend(suffix_ids)
+            completion_logprobs.extend([0.0] * len(suffix_ids))
+            tool_mask.extend([0] * len(suffix_ids))
+            if env.format_violation:
+                # Step-level format violation -> early-terminate with r_t = -1.0.
+                # Keep the partial completion so the advantage applies to the tokens
+                # generated up to the violation; skip the judge entirely.
+                self._rollout_rewards[id(completion)] = -1.0
+                env.close_session()
+                return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
+            prompt_ids = prompt_ids + turn_ids + suffix_ids
+            iteration_num += 1
 
     def _verifier_reward(self, completions, **kwargs):
         return [self._rollout_rewards.pop(id(c), 0.0) for c in completions]
@@ -265,8 +341,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", default="Qwen/Qwen3-4B-Instruct-2507-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=None)
-    parser.add_argument("--max-completion-length", type=int, default=1024)
+    parser.add_argument("--max-turns", type=int, default=20)
+    parser.add_argument("--max-completion-length", type=int, default=2048)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
@@ -314,7 +390,7 @@ def main() -> None:
     tokenizer.chat_template = qwen3_instruct_2507_chat_template
 
     grpo_config = AsyncGRPOConfig(
-        model_init_kwargs={"attn_implementation": "flash-attention_3"},
+        model_init_kwargs={"attn_implementation": "flash_attention_3"},
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
         learning_rate=args.learning_rate,
@@ -330,10 +406,11 @@ def main() -> None:
         max_tool_calling_iterations=args.max_turns,
         # Sequence-level importance sampling (GSPO), matching the AWM paper: one
         # length-normalized ratio per rollout instead of raw per-token ratios.
-        importance_sampling_level="sequence",
+        importance_sampling_level="sequence_token",
         loss_type="grpo",
         epsilon_high=0.28,  # DAPO-style high clip for more exploration
-        beta=0.001,         # KL coefficient (TRL default is 0.0, i.e. no KL)
+        # No KL penalty: the async trainer has no reference model, and old_log_probs
+        # are vLLM sampling logprobs, not reference logprobs. GSPO with beta=0.
         log_completions=True,
         num_completions_to_print=2,
         # chat_template_kwargs={"enable_thinking": False},
