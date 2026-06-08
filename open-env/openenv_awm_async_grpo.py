@@ -398,7 +398,7 @@ def main() -> None:
         max_tool_calling_iterations=args.max_turns,
         # Sequence-level importance sampling (GSPO), matching the AWM paper: one
         # length-normalized ratio per rollout instead of raw per-token ratios.
-        importance_sampling_level="sequence",
+        importance_sampling_level="sequence_token",
         loss_type="grpo",
         epsilon_high=0.28,  # DAPO-style high clip for more exploration
         # No KL penalty: the async trainer has no reference model, and old_log_probs
