@@ -46,7 +46,7 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 0
 fi
 
-uv run python - <<'PY'
+python - <<'PY'
 import sys
 
 try:

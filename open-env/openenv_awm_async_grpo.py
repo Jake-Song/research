@@ -249,7 +249,15 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     (m.get("content", "") for m in reversed(completion) if m.get("role") == "assistant"),
                     "",
                 )
-                self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
+                try:
+                    self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout, final_answer)
+                except RuntimeError:
+                    # The worker loop is shutting down (its default executor is closed,
+                    # so to_thread can't submit) — typically at a worker stop/restart or
+                    # phase boundary while this rollout is still in flight. The reward is
+                    # discarded at teardown anyway; swallow it so the worker isn't marked
+                    # failed and check_health doesn't abort the whole run.
+                    self._rollout_rewards[id(completion)] = 0.0
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
