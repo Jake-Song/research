@@ -241,7 +241,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             completion.append(assistant_message)
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
-            tool_mask.extend([1] * len(turn_ids))
+            tool_mask.extend(self._turn_mask(turn_ids))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
