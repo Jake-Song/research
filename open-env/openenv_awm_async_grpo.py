@@ -52,6 +52,7 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import argparse
 import asyncio
 import json
+import logging
 
 from datasets import Dataset
 from trl.chat_template_utils import parse_response
@@ -62,6 +63,8 @@ from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from agent_world_model_env import AWMEnv
 from dotenv import load_dotenv
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """\
@@ -298,7 +301,12 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
     def _verifier_reward(self, completions, **kwargs):
-        return [self._rollout_rewards.pop(id(c), 0.0) for c in completions]
+        rewards = []
+        for c in completions:
+            if id(c) not in self._rollout_rewards:
+                logger.warning("verifier reward missing for completion id=%d; defaulting to 0.0", id(c))
+            rewards.append(self._rollout_rewards.pop(id(c), 0.0))
+        return rewards
 
 
 # ---------------------------------------------------------------------------
