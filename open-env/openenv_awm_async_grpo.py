@@ -121,12 +121,16 @@ class AWMEnvironment:
         # Set by call_tool when a tool call hits a format violation; the rollout
         # worker checks it to early-terminate the rollout with reward -1.0.
         self.format_violation = False
+        self.scenario = None
+        self.task_idx = None
 
     def reset(self, scenario: str, task_idx: int, **kwargs) -> None:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
         # The sql verifier's LLM judge is configured via OPENENV_AWM_LLM_* env
         # vars, which the env's reset() reads automatically.
         self.format_violation = False
+        self.scenario = scenario
+        self.task_idx = task_idx
         self.env.reset(
             scenario=scenario,
             task_idx=task_idx,
@@ -199,6 +203,10 @@ class AWMEnvironment:
 # Rollout worker — scores each episode out-of-band, reward never in context
 # ---------------------------------------------------------------------------
 
+# Set in main() to <output_dir>/rollouts.jsonl; the worker appends one JSON
+# line per finished rollout. Only rank 0 runs the worker, so no write races.
+TRAJECTORY_FILE = None
+
 
 class AWMRolloutWorker(AsyncRolloutWorker):
     """AsyncRolloutWorker subclass that scores AWM rollouts outside the model.
@@ -254,6 +262,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # discarded at teardown anyway; swallow it so the worker isn't marked
                     # failed and check_health doesn't abort the whole run.
                     self._rollout_rewards[id(completion)] = 0.0
+                self._save_trajectory(env, prompt, completion, self._rollout_rewards[id(completion)])
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
@@ -270,9 +279,23 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # generated up to the violation; skip the judge entirely.
                 self._rollout_rewards[id(completion)] = -1.0
                 env.close_session()
+                self._save_trajectory(env, prompt, completion, -1.0)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
             prompt_ids = prompt_ids + turn_ids + suffix_ids
             iteration_num += 1
+
+    def _save_trajectory(self, env, prompt, completion, reward):
+        if TRAJECTORY_FILE is None:
+            return
+        record = {
+            "scenario": env.scenario,
+            "task_idx": env.task_idx,
+            "reward": reward,
+            "prompt": prompt,
+            "completion": completion,
+        }
+        with open(TRAJECTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
     def _verifier_reward(self, completions, **kwargs):
         return [self._rollout_rewards.pop(id(c), 0.0) for c in completions]
@@ -369,6 +392,10 @@ def main() -> None:
     huggingface_hub.login()
     wandb.login()
     wandb.init(project=args.wandb_project, name=args.wandb_name)
+
+    global TRAJECTORY_FILE
+    os.makedirs(args.output_dir, exist_ok=True)
+    TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
 
     dataset = build_dataset(args.env_url, args.dataset_size)
 
