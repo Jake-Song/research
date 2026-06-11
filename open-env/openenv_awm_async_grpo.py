@@ -111,7 +111,11 @@ MESSAGE_TIMEOUT_S = 600.0
 # reward_type strings the AWM env assigns to tool-call format violations
 # (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
 # The paper terminates the rollout with r_t = -1.0 on any such violation.
-_FORMAT_ERROR_REWARD_TYPES = {"tool_not_found", "invalid_args", "invalid_action"}
+# Only truly malformed actions abort the rollout with -1.0. tool_not_found and
+# invalid_args (wrong tool name, schema misses like a missing required property)
+# are recoverable: the model sees the error text in the tool message and can
+# retry, instead of dying on calls that were 90% correct.
+_FORMAT_ERROR_REWARD_TYPES = {"invalid_action"}
 
 
 class AWMEnvironment:
