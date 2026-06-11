@@ -107,7 +107,7 @@ def format_tools(tools) -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
-
+MESSAGE_TIMEOUT_S = 600.0
 # reward_type strings the AWM env assigns to tool-call format violations
 # (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
 # The paper terminates the rollout with r_t = -1.0 on any such violation.
@@ -120,7 +120,7 @@ class AWMEnvironment:
     def __init__(self, env_url: str):
         # Default message_timeout_s is 60s; the sql verifier's LLM judge can take
         # longer, so bump it to avoid spurious TimeoutErrors during scoring.
-        self.env = AWMEnv(base_url=env_url, message_timeout_s=300.0).sync()
+        self.env = AWMEnv(base_url=env_url, message_timeout_s=MESSAGE_TIMEOUT_S).sync()
         # Set by call_tool when a tool call hits a format violation; the rollout
         # worker checks it to early-terminate the rollout with reward -1.0.
         self.format_violation = False
@@ -204,7 +204,7 @@ class AWMEnvironment:
 
     def close_session(self) -> None:
         """End the episode without running the verifier (used by early-terminate)."""
-        self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
+        self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
 
 
 # ---------------------------------------------------------------------------
@@ -269,7 +269,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # phase boundary while this rollout is still in flight. The reward is
                     # discarded at teardown anyway; swallow it so the worker isn't marked
                     # failed and check_health doesn't abort the whole run.
-                    reward, status = 0.0, "server_error"
+                    reward, status = 0.1, "server_error"
                 self._rollout_rewards[id(completion)] = reward
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
