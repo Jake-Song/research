@@ -215,6 +215,14 @@ class AWMEnvironment:
 # line per finished rollout. Only rank 0 runs the worker, so no write races.
 TRAJECTORY_FILE = None
 
+# Set in main() to the sorted scenario names in the dataset. The trainer's
+# metric all-reduce requires every sample on every rank to carry the same
+# metric keys in the same order, so per-scenario metrics must use this fixed
+# key set (unvisited scenarios report 0.0) rather than sparse per-group keys.
+SCENARIO_NAMES = None
+
+_REWARD_EMA_ALPHA = 0.1  # ~20-group (10-step) smoothing window
+
 
 class AWMRolloutWorker(AsyncRolloutWorker):
     """AsyncRolloutWorker subclass that scores AWM rollouts outside the model.
@@ -230,6 +238,32 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self._rollout_rewards: dict[int, float] = {}
         self.reward_funcs = [self._verifier_reward]
         self.reward_func_names = ["task_reward"]
+        self._reward_ema = None
+        self._scenario_means: dict[str, tuple[int, float]] = {}  # name -> (n_groups, mean)
+
+    async def _score_group(self, group):
+        # Attach reward EMA and per-scenario running means to every sample so
+        # they show up as W&B curves (reward_ema, rewards/scenario/<name>).
+        samples = await super()._score_group(group)
+        if not samples:
+            return samples
+        group_reward = sum(s.metrics["reward"] for s in samples) / len(samples)
+        self._reward_ema = (
+            group_reward
+            if self._reward_ema is None
+            else _REWARD_EMA_ALPHA * group_reward + (1 - _REWARD_EMA_ALPHA) * self._reward_ema
+        )
+        scenario = group.reward_kwargs["scenario"][0]
+        n, mean = self._scenario_means.get(scenario, (0, 0.0))
+        self._scenario_means[scenario] = (n + 1, mean + (group_reward - mean) / (n + 1))
+        extra = {
+            f"rewards/scenario/{name}": self._scenario_means.get(name, (0, 0.0))[1]
+            for name in SCENARIO_NAMES
+        }
+        extra["reward_ema"] = self._reward_ema
+        for s in samples:
+            s.metrics.update(extra)
+        return samples
 
     async def _generate_one(self, prompt, tool_dict):
         # Reimplements AsyncRolloutWorker._generate_one's multi-turn loop so we can
@@ -340,13 +374,18 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
             scenario_names.append(scenario["name"])
             task_indices.append(task_idx)
 
-    return Dataset.from_dict(
+    # Shuffle before truncating: the scenario list is ordered, so taking the
+    # first dataset_size rows would both bias the dataset to early scenarios and
+    # iterate one scenario at a time (making per-step reward track scenario
+    # difficulty instead of training progress).
+    dataset = Dataset.from_dict(
         {
-            "prompt": prompts[:dataset_size],
-            "scenario": scenario_names[:dataset_size],
-            "task_idx": task_indices[:dataset_size],
+            "prompt": prompts,
+            "scenario": scenario_names,
+            "task_idx": task_indices,
         }
-    )
+    ).shuffle(seed=42)
+    return dataset.select(range(min(dataset_size, len(dataset))))
 
 
 # ---------------------------------------------------------------------------
@@ -407,11 +446,12 @@ def main() -> None:
     wandb.login()
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
-    global TRAJECTORY_FILE
+    global TRAJECTORY_FILE, SCENARIO_NAMES
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
 
     dataset = build_dataset(args.env_url, args.dataset_size)
+    SCENARIO_NAMES = sorted(set(dataset["scenario"]))
 
     # Point the trainer at our subclass so it instantiates AWMRolloutWorker
     # instead of the base. The trainer still handles all weight-metadata and
