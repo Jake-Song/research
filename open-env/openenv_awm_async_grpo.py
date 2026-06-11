@@ -435,7 +435,9 @@ def main() -> None:
         per_device_train_batch_size=args.per_device_batch_size,
         lr_scheduler_type="constant",
         optim=args.optim,
-        max_grad_norm=1.0,
+        # Pre-clip grad norms run 0-10 in practice; clipping at 1.0 was scaling
+        # most updates down 5-10x. Clip only the rare outliers (~35).
+        max_grad_norm=10.0,
 
         # GRPO configuration
         num_generations=args.num_generations,
