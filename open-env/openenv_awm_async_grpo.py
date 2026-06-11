@@ -177,7 +177,7 @@ class AWMEnvironment:
             text = json.dumps(obs.model_dump(), ensure_ascii=False)
         return text[:_MAX_TOOL_RESPONSE_CHARS]
 
-    def _score_rollout(self) -> float:
+    def _score_rollout(self) -> tuple[float, str]:
         """Run the verifier on the finished episode. Not exposed to the model.
 
         Uses the "sql" verifier only — the code-augmented LLM-as-Judge that the
@@ -187,13 +187,18 @@ class AWMEnvironment:
 
         A scoring failure (e.g. the LLM judge timing out) must not crash the
         rollout worker — _generate_loop re-raises any task exception — so on
-        error we return 0.0 and always close the session.
+        error we return (0.0, "server_error") and always close the session.
+
+        Returns:
+            (reward, status) where status is "complete", "incomplete", or
+            "server_error".
         """
         try:
             r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-            return float(r.reward or 0.0)
+            reward = float(r.reward or 0.0)
+            return reward, "complete" if reward == 1.0 else "incomplete"
         except Exception:
-            return 0.0
+            return 0.0, "server_error"
         finally:
             self.close_session()
 
@@ -257,15 +262,16 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
                 try:
-                    self._rollout_rewards[id(completion)] = await asyncio.to_thread(env._score_rollout)
+                    reward, status = await asyncio.to_thread(env._score_rollout)
                 except RuntimeError:
                     # The worker loop is shutting down (its default executor is closed,
                     # so to_thread can't submit) — typically at a worker stop/restart or
                     # phase boundary while this rollout is still in flight. The reward is
                     # discarded at teardown anyway; swallow it so the worker isn't marked
                     # failed and check_health doesn't abort the whole run.
-                    self._rollout_rewards[id(completion)] = 0.0
-                self._save_trajectory(env, prompt, completion, self._rollout_rewards[id(completion)])
+                    reward, status = 0.0, "server_error"
+                self._rollout_rewards[id(completion)] = reward
+                self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
             tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
@@ -282,18 +288,19 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # generated up to the violation; skip the judge entirely.
                 self._rollout_rewards[id(completion)] = -1.0
                 env.close_session()
-                self._save_trajectory(env, prompt, completion, -1.0)
+                self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
             prompt_ids = prompt_ids + turn_ids + suffix_ids
             iteration_num += 1
 
-    def _save_trajectory(self, env, prompt, completion, reward):
+    def _save_trajectory(self, env, prompt, completion, reward, status):
         if TRAJECTORY_FILE is None:
             return
         record = {
             "scenario": env.scenario,
             "task_idx": env.task_idx,
             "reward": reward,
+            "status": status,
             "prompt": prompt,
             "completion": completion,
         }
