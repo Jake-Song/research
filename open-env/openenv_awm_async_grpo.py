@@ -191,7 +191,10 @@ class AWMEnvironment:
 
         A scoring failure (e.g. the LLM judge timing out) must not crash the
         rollout worker — _generate_loop re-raises any task exception — so on
-        error we return (0.0, "server_error") and always close the session.
+        error we return (0.1, "server_error") and always close the session.
+        0.1 matches the incomplete baseline: a server failure is not the
+        model's fault, so it must not score below group-mates whose episodes
+        were judged incomplete.
 
         Returns:
             (reward, status) where status is "complete", "incomplete", or
@@ -202,7 +205,7 @@ class AWMEnvironment:
             reward = float(r.reward or 0.0)
             return reward, "complete" if reward == 1.0 else "incomplete"
         except Exception:
-            return 0.0, "server_error"
+            return 0.1, "server_error"
         finally:
             self.close_session()
 
@@ -304,10 +307,11 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 except RuntimeError:
                     # The worker loop is shutting down (its default executor is closed,
                     # so to_thread can't submit) — typically at a worker stop/restart or
-                    # phase boundary while this rollout is still in flight. The reward is
-                    # discarded at teardown anyway; swallow it so the worker isn't marked
-                    # failed and check_health doesn't abort the whole run.
-                    reward, status = 0.1, "server_error"
+                    # phase boundary while this rollout is still in flight. Not a server
+                    # error: the env is fine, the rollout just got caught in teardown and
+                    # its reward is discarded anyway; swallow it so the worker isn't
+                    # marked failed and check_health doesn't abort the whole run.
+                    reward, status = 0.1, "discarded"
                 self._rollout_rewards[id(completion)] = reward
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
