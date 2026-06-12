@@ -424,6 +424,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=20)
     parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
@@ -489,6 +490,7 @@ def main() -> None:
         # GRPO configuration
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
+        thinking_token_budget=args.thinking_token_budget,
         max_tool_calling_iterations=args.max_turns,
         # Sequence-level importance sampling (GSPO), matching the AWM paper: one
         # length-normalized ratio per rollout instead of raw per-token ratios.
