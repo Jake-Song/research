@@ -10,7 +10,10 @@ fsdp_config:
   fsdp_reshard_after_forward: true            # full shard (params re-sharded after fwd)
   fsdp_auto_wrap_policy: TRANSFORMER_BASED_WRAP
   fsdp_transformer_layer_cls_to_wrap: Qwen3DecoderLayer
-  fsdp_state_dict_type: SHARDED_STATE_DICT
+  # FULL_STATE_DICT so save_model/checkpoints write from_pretrained-loadable
+  # weights (Trainer.save_model is a no-op under SHARDED_STATE_DICT), which
+  # warm-starting a later run via --model-id depends on.
+  fsdp_state_dict_type: FULL_STATE_DICT
   fsdp_offload_params: false
   fsdp_cpu_ram_efficient_loading: true
   fsdp_activation_checkpointing: false        # script already sets gradient_checkpointing=True

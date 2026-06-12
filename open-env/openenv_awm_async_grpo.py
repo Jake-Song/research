@@ -347,7 +347,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
 # ---------------------------------------------------------------------------
 
 
-def build_dataset(env_url: str, dataset_size: int) -> Dataset:
+def build_dataset(env_url: str, dataset_size: int, dataset_start: int = 0) -> Dataset:
     """List AWM scenarios/tasks and build the GRPO prompt dataset."""
     env = AWMEnv(base_url=env_url).sync()
     with env:
@@ -377,7 +377,11 @@ def build_dataset(env_url: str, dataset_size: int) -> Dataset:
             "task_idx": task_indices,
         }
     ).shuffle(seed=42)
-    return dataset.select(range(min(dataset_size, len(dataset))))
+    # The fixed seed makes the shuffled order identical across runs, so a
+    # warm-started run can continue at index dataset_start (= sum of prior
+    # runs' dataset sizes) instead of replaying the same rows.
+    end = min(dataset_start + dataset_size, len(dataset))
+    return dataset.select(range(dataset_start, end))
 
 
 # ---------------------------------------------------------------------------
@@ -401,10 +405,22 @@ def task_reward(completions, **kwargs):
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
-    parser.add_argument("--model-id", default="Qwen/Qwen3-4B-Instruct-2507")
+    parser.add_argument(
+        "--model-id",
+        default="Qwen/Qwen3-4B-Instruct-2507",
+        help="Base HF model, or a previous run's output dir / checkpoint-N dir / Hub"
+        " repo to warm-start from (continual training). Use a fresh --output-dir.",
+    )
     parser.add_argument("--env-url", default="http://localhost:8899")
     parser.add_argument("--output-dir", default="Qwen/Qwen3-4B-Instruct-2507-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
+    parser.add_argument(
+        "--dataset-start",
+        type=int,
+        default=0,
+        help="Start index into the shuffled dataset; for continual training set"
+        " this to the sum of previous runs' dataset sizes.",
+    )
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=20)
     parser.add_argument("--max-completion-length", type=int, default=2048)
@@ -442,7 +458,7 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
 
-    dataset = build_dataset(args.env_url, args.dataset_size)
+    dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
 
     # Point the trainer at our subclass so it instantiates AWMRolloutWorker
     # instead of the base. The trainer still handles all weight-metadata and
