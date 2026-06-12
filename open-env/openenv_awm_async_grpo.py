@@ -222,12 +222,6 @@ class AWMEnvironment:
 # line per finished rollout. Only rank 0 runs the worker, so no write races.
 TRAJECTORY_FILE = None
 
-# Set in main() to the sorted scenario names in the dataset. The trainer's
-# metric all-reduce requires every sample on every rank to carry the same
-# metric keys in the same order, so per-scenario metrics must use this fixed
-# key set (unvisited scenarios report 0.0) rather than sparse per-group keys.
-SCENARIO_NAMES = None
-
 _REWARD_EMA_ALPHA = 0.1  # ~20-group (10-step) smoothing window
 
 
@@ -246,11 +240,9 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self.reward_funcs = [self._verifier_reward]
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
-        self._scenario_means: dict[str, tuple[int, float]] = {}  # name -> (n_groups, mean)
 
     async def _score_group(self, group):
-        # Attach reward EMA and per-scenario running means to every sample so
-        # they show up as W&B curves (reward_ema, rewards/scenario/<name>).
+        # Attach a reward EMA to every sample so it shows up as a W&B curve.
         samples = await super()._score_group(group)
         if not samples:
             return samples
@@ -260,16 +252,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             if self._reward_ema is None
             else _REWARD_EMA_ALPHA * group_reward + (1 - _REWARD_EMA_ALPHA) * self._reward_ema
         )
-        scenario = group.reward_kwargs["scenario"][0]
-        n, mean = self._scenario_means.get(scenario, (0, 0.0))
-        self._scenario_means[scenario] = (n + 1, mean + (group_reward - mean) / (n + 1))
-        extra = {
-            f"rewards/scenario/{name}": self._scenario_means.get(name, (0, 0.0))[1]
-            for name in SCENARIO_NAMES
-        }
-        extra["reward_ema"] = self._reward_ema
         for s in samples:
-            s.metrics.update(extra)
+            s.metrics["reward_ema"] = self._reward_ema
         return samples
 
     async def _generate_one(self, prompt, tool_dict):
@@ -454,12 +438,11 @@ def main() -> None:
     wandb.login()
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
-    global TRAJECTORY_FILE, SCENARIO_NAMES
+    global TRAJECTORY_FILE
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
 
     dataset = build_dataset(args.env_url, args.dataset_size)
-    SCENARIO_NAMES = sorted(set(dataset["scenario"]))
 
     # Point the trainer at our subclass so it instantiates AWMRolloutWorker
     # instead of the base. The trainer still handles all weight-metadata and
