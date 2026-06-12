@@ -205,7 +205,7 @@ class AWMEnvironment:
             reward = float(r.reward or 0.0)
             return reward, "complete" if reward == 1.0 else "incomplete"
         except Exception:
-            return 0.1, "server_error"
+            return 0.1, "env_error"
         finally:
             self.close_session()
 
@@ -295,7 +295,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # error: the env is fine, the rollout just got caught in teardown and
                     # its reward is discarded anyway; swallow it so the worker isn't
                     # marked failed and check_health doesn't abort the whole run.
-                    reward, status = 0.1, "discarded"
+                    reward, status = 0.1, "thread_error"
                 self._rollout_rewards[id(completion)] = reward
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
@@ -407,12 +407,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
     parser.add_argument(
         "--model-id",
-        default="Qwen/Qwen3-4B-Instruct-2507",
+        default="Qwen/Qwen3-4B",
         help="Base HF model, or a previous run's output dir / checkpoint-N dir / Hub"
         " repo to warm-start from (continual training). Use a fresh --output-dir.",
     )
     parser.add_argument("--env-url", default="http://localhost:8899")
-    parser.add_argument("--output-dir", default="Qwen/Qwen3-4B-Instruct-2507-awm-async-grpo")
+    parser.add_argument("--output-dir", default="Qwen3-4B-Thinking-awm-async-grpo")
     parser.add_argument("--dataset-size", type=int, default=1000)
     parser.add_argument(
         "--dataset-start",
@@ -430,7 +430,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch")
     parser.add_argument("--num-epochs", type=int, default=1)
-    parser.add_argument("--save-steps", type=int, default=10)
+    parser.add_argument("--save-steps", type=int, default=30)
     parser.add_argument("--save-total-limit", type=int, default=1)
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--vllm-server-host", default="127.0.0.1")
@@ -438,8 +438,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vllm-server-timeout", type=float, default=1200.0)
     parser.add_argument("--push-to-hub", action="store_true", default=True)
     parser.add_argument("--no-push-to-hub", dest="push_to_hub", action="store_false")
-    parser.add_argument("--wandb-project", default="openenv-awm")
-    parser.add_argument("--wandb-name", default="awm-async-grpo")
+    parser.add_argument("--wandb-project", default="openenv-awm-thinking")
+    parser.add_argument("--wandb-name", default="awm-thinking-async-grpo")
     return parser.parse_args()
 
 
@@ -448,7 +448,7 @@ def main() -> None:
     import wandb
 
     from transformers import AutoTokenizer
-    from trl.chat_template_utils import qwen3_instruct_2507_chat_template
+    from trl.chat_template_utils import qwen3_chat_template
 
     args = parse_args()
     huggingface_hub.login()
@@ -472,7 +472,7 @@ def main() -> None:
     # would raise. Swap in TRL's bundled qwen3-instruct-2507 template (same <tool_call>
     # format) so the schema is recognized, and pass the tokenizer to the trainer.
     tokenizer = AutoTokenizer.from_pretrained(args.model_id)
-    tokenizer.chat_template = qwen3_instruct_2507_chat_template
+    tokenizer.chat_template = qwen3_chat_template
 
     grpo_config = AsyncGRPOConfig(
         model_init_kwargs={"attn_implementation": "flash_attention_3"},
