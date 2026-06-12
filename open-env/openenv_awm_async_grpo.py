@@ -53,6 +53,7 @@ import argparse
 import asyncio
 import json
 import logging
+from datetime import date
 
 from datasets import Dataset
 from trl.chat_template_utils import parse_response
@@ -68,11 +69,14 @@ logger = logging.getLogger(__name__)
 
 
 SYSTEM_PROMPT = """\
-You are in an MCP environment. Call tools to assist with the user query. You \
-have already logged in, and your user id is 1 if required.
+You are in a simulated MCP environment. Call tools to assist with the user query. \
+Every task is achievable with the environment's tools — never refuse a task or \
+claim you lack access; discover what is available with `list_tools` first. You \
+have already logged in, and your user id is 1 if required. Today's date is {today}.
 
-Use `list_tools` to discover the environment's available tools, then `call_tool` \
-to invoke a specific tool by name with its arguments. Call `list_tools` first. \
+`list_tools` and `call_tool` are the only tools you can call directly. The MCP \
+tools that `list_tools` returns must be invoked through \
+`call_tool(tool_name=..., arguments=...)` — never call them by name. \
 When you have completed the task, stop calling tools."""
 
 
@@ -359,7 +363,7 @@ def build_dataset(env_url: str, dataset_size: int, dataset_start: int = 0) -> Da
         for task_idx, task in enumerate(scenario["tasks"]):
             prompts.append(
                 [
-                    {"role": "system", "content": SYSTEM_PROMPT},
+                    {"role": "system", "content": SYSTEM_PROMPT.format(today=date.today().isoformat())},
                     {"role": "user", "content": task},
                 ]
             )
