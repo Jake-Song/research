@@ -422,9 +422,9 @@ def parse_args() -> argparse.Namespace:
         " this to the sum of previous runs' dataset sizes.",
     )
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=20)
-    parser.add_argument("--max-completion-length", type=int, default=2048)
-    parser.add_argument("--thinking-token-budget", type=int, default=None)
+    parser.add_argument("--max-turns", type=int, default=10)
+    parser.add_argument("--max-completion-length", type=int, default=3072)
+    parser.add_argument("--thinking-token-budget", type=int, default=2560)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
