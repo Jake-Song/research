@@ -14,8 +14,8 @@ If the user didn't give a path, look for (in order): a path mentioned in the con
 One JSON object per line:
 
 - `scenario` (str), `task_idx` (int) — which AWM task.
-- `reward` (float) — verifier reward: 1.0 = task done, 0.1 = incomplete/partial, 0.0 = verifier judged failed. −1.0 (format violation) is reserved for `invalid_action` only and may not appear at all in a run.
-- `status` (str) — `complete` (reward 1.0), `incomplete` (covers both reward 0.1 and 0.0), `server_error` (scoring failed; reward forced to 0.1), `discarded` (caught in worker teardown; reward unused).
+- `reward` (float) — verifier reward: 1.0 = task done, 0.1 = incomplete/partial (also used for scoring failures), 0.0 = judge classified agent_error. −1.0 (format violation) is reserved for `invalid_action` only and may not appear at all in a run.
+- `status` (str) — judged outcomes: `complete` (1.0), `incomplete` (0.1), `agent_error` (0.0). Scoring failures (reward forced to 0.1, not the model's fault): a server-side reward_type such as `judge_error` / `no_verifier` / `server_error`, or `env_error:<ExceptionType>` for client-side errors talking to the env. `thread_error` = caught in worker teardown (reward unused). `format_violation` = early-terminated with −1.0.
 - `prompt` — list of `{role, content}` (system + user task).
 - `completion` — multi-turn message list: assistant messages (may carry `tool_calls`) interleaved with `tool` messages (`name` + `content` = tool result).
 

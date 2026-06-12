@@ -196,25 +196,40 @@ class AWMEnvironment:
         (Pure "code" verification is deliberately excluded: the paper shows it
         produces false negatives on partial/transient executions.)
 
-        A scoring failure (e.g. the LLM judge timing out) must not crash the
-        rollout worker — _generate_loop re-raises any task exception — so on
-        error we return (0.1, "server_error") and always close the session.
-        0.1 matches the incomplete baseline: a server failure is not the
-        model's fault, so it must not score below group-mates whose episodes
-        were judged incomplete.
+        Status comes from the server's reward_type, not from the reward value:
+        the env returns reward 0.0 for server-side scoring failures
+        (judge_error, no_verifier, server_error), which would otherwise be
+        indistinguishable from a judged outcome. Judged outcomes (complete=1.0,
+        incomplete=0.1, agent_error=0.0) keep the server's reward; scoring
+        failures get 0.1 — the incomplete baseline — because a server failure
+        is not the model's fault and must not score below group-mates whose
+        episodes were judged incomplete.
+
+        A scoring failure must also not crash the rollout worker —
+        _generate_loop re-raises any task exception — so client-side errors
+        (e.g. an HTTP timeout talking to the env) are caught and reported as
+        "env_error:<ExceptionType>" with reward 0.1. close_session is guarded
+        too: an exception in the finally block would replace the return value
+        and propagate past _generate_one's narrow `except RuntimeError`.
 
         Returns:
-            (reward, status) where status is "complete", "incomplete", or
-            "server_error".
+            (reward, status) where status is "complete", "incomplete",
+            "agent_error", a server-side failure reward_type (e.g.
+            "judge_error"), or "env_error:<ExceptionType>".
         """
         try:
             r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
-            reward = float(r.reward or 0.0)
-            return reward, "complete" if reward == 1.0 else "incomplete"
-        except Exception:
-            return 0.1, "env_error"
+            status = r.observation.reward_type
+            if status in ("complete", "incomplete", "agent_error"):
+                return float(r.reward or 0.0), status
+            return 0.1, status or "env_server_error"
+        except Exception as e:
+            return 0.1, f"env_server_error:{type(e).__name__}"
         finally:
-            self.close_session()
+            try:
+                self.close_session()
+            except Exception:
+                logger.warning("close_session failed after scoring", exc_info=True)
 
     def close_session(self) -> None:
         """End the episode without running the verifier (used by early-terminate)."""
@@ -302,7 +317,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # error: the env is fine, the rollout just got caught in teardown and
                     # its reward is discarded anyway; swallow it so the worker isn't
                     # marked failed and check_health doesn't abort the whole run.
-                    reward, status = 0.1, "thread_error"
+                    reward, status = 0.1, "rollout_error"
                 self._rollout_rewards[id(completion)] = reward
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
