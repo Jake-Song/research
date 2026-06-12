@@ -79,6 +79,8 @@ Classify each failing rollout by its tool-call names — this splits the failure
 
 Also check the truncation signature: rollouts whose last assistant message has no text (empty content, possibly dangling `tool_calls`) were cut off by `max_tokens` — with a thinking model this is the runaway-`<think>` / empty-response failure that `--thinking-token-budget` addresses. If nearly every rollout ends with proper text, truncation is not the problem.
 
-### Part 5: Report
+### Part 5: Report to LOG.md
 
 Summarize findings in prose: overall reward + trend, which scenarios drag the mean down, and what the failing trajectories actually do (e.g. "model claims it has no tools instead of calling list_tools"). Quote short transcript excerpts as evidence.
+
+Append the report to `LOG.md` in the repo root (create it if missing) under a heading like `## YYYY-MM-DD — <path to rollouts.jsonl>`, then give the user a brief recap in chat and point them to the LOG.md entry.
