@@ -14,8 +14,8 @@ If the user didn't give a path, look for (in order): a path mentioned in the con
 One JSON object per line:
 
 - `scenario` (str), `task_idx` (int) — which AWM task.
-- `reward` (float) — verifier reward, 1.0 = task done; 0.1 = baseline for not-model's-fault outcomes.
-- `status` (str) — `complete` (reward 1.0), `incomplete` (verifier judged unfinished), `server_error` (scoring failed; reward forced to 0.1), `discarded` (caught in worker teardown; reward unused).
+- `reward` (float) — verifier reward: 1.0 = task done, 0.1 = incomplete/partial, 0.0 = verifier judged failed. −1.0 (format violation) is reserved for `invalid_action` only and may not appear at all in a run.
+- `status` (str) — `complete` (reward 1.0), `incomplete` (covers both reward 0.1 and 0.0), `server_error` (scoring failed; reward forced to 0.1), `discarded` (caught in worker teardown; reward unused).
 - `prompt` — list of `{role, content}` (system + user task).
 - `completion` — multi-turn message list: assistant messages (may carry `tool_calls`) interleaved with `tool` messages (`name` + `content` = tool result).
 
@@ -39,6 +39,8 @@ for s, rs in sorted(scen.items(), key=lambda kv: sum(kv[1])/len(kv[1])):
     print(f"{s:24s} n={len(rs):4d} mean={sum(rs)/len(rs):.3f}")
 EOF
 ```
+
+Also report the exact reward-value histogram (`collections.Counter` over rewards) — the 0.0 vs 0.1 split distinguishes "failed" from "partial" — and the **zero-variance group count**: group rewards by `(scenario, task_idx)` and count groups where all rewards are identical. Those groups have zero GRPO advantage and contribute no gradient; if a large share (e.g. >50%) is zero-variance, say so — it explains a flat reward curve better than any per-trajectory pathology, and points to difficulty filtering as the fix.
 
 Then drill into whatever the user actually asked about.
 
@@ -66,6 +68,16 @@ EOF
 ```
 
 Useful variants: compare a `complete` vs an `incomplete` rollout of the same `(scenario, task_idx)`; count tool calls per rollout (`sum(len(m.get("tool_calls") or []) for m in r["completion"] if m["role"]=="assistant")`); grep tool results for error strings.
+
+### Part 4b: Triage failures into known categories
+
+Classify each failing rollout by its tool-call names — this splits the failure mass into actionable buckets:
+
+- **`no_tool_calls`** — zero tool calls: the model refused from chat habit ("I don't have access to..."), common on finance/payment tasks. Fix lives in the system prompt.
+- **`direct_mcp_names`** — any call whose name is not `list_tools`/`call_tool`: the model called an MCP tool by name instead of through the `call_tool` wrapper. Signature: tool results like `{'error': "'list_collections'"}` (a bare `KeyError` repr from `tool_dict[name]`). Count these wasted turns; models often conclude "the system is broken" and give up.
+- **`proper_wrapper`** — mechanics correct, content wrong. Look for grounding errors: the model inventing absolute dates for relative ones ("next 14 days" → queries from `2025-01-01`), then trusting an empty result. Check whether the system prompt includes today's date.
+
+Also check the truncation signature: rollouts whose last assistant message has no text (empty content, possibly dangling `tool_calls`) were cut off by `max_tokens` — with a thinking model this is the runaway-`<think>` / empty-response failure that `--thinking-token-budget` addresses. If nearly every rollout ends with proper text, truncation is not the problem.
 
 ### Part 5: Report
 
