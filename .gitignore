@@ -12,3 +12,4 @@ wheels/
 .venv
 
 uv.lock
+rollouts.jsonl
