@@ -6,12 +6,14 @@ uv run python "$(dirname "$0")/patch_vllm_thinking_budget.py"
 
 CUDA_VISIBLE_DEVICES=0 VLLM_SERVER_DEV_MODE=1 \
     uv run vllm serve Qwen/Qwen3-4B \
-        --max-model-len 32000 \
+        --max-model-len 40960 \
         --logprobs-mode processed_logprobs \
         --reasoning-parser deepseek_r1 \
         --reasoning-config '{"reasoning_start_str": "<think>", "reasoning_end_str": "</think>"}' \
         --weight-transfer-config '{"backend":"nccl"}' \
-        --override-generation-config '{"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0,"presence_penalty":1.5}'
+        --override-generation-config '{"temperature":0.6,"top_p":0.95,"top_k":20,"min_p":0,"presence_penalty":1.5}' \
+        --hf-overrides '{"rope_scaling":{"rope_type":"yarn","factor":4.0,"original_max_position_embeddings":32768}}'
+        
         # Qwen3 thinking-mode recommended sampling. The rollout request omits
         # top_p/top_k/min_p/presence_penalty so these server defaults apply; it
         # always sends temperature, so during training the trainer's
