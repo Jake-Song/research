@@ -87,3 +87,27 @@ At 2 groups/step, a 24-step run processes ~48 groups. The current ~1000-row data
 
 - Per-task curves trending up on the learnable set → pipeline confirmed, scale back to the full dataset.
 - Flat per-task curves despite repeated visits, healthy reward_std, and no format traps → genuine learning-signal problem; suspects become LR=7e-7 too small, advantage quality, or credit assignment over multi-turn tool masks.
+
+## 2026-06-14 — rollouts.jsonl (repo root, 422 rollouts)
+
+**Overview.** 422 rollouts, mean reward **0.354**. Reward histogram: `1.0`×124 (complete), `0.1`×255, `0.0`×43 (agent_error). No `-1.0` format violations. Status mix: complete 124, incomplete 123, agent_error 43, plus a large **non-model / scoring-failure band of 132 (31%)**: rollout_error 42, episode_already_done 35, server_error 24, no_verifier 16, judge_error 15 — all forced to 0.1.
+
+**The end-of-run reward "collapse" is an infra artifact, not regression.** Reward by tenth: `0.40 0.43 0.43 0.32 0.41 0.26 0.46 0.42 0.32 0.12 0.10`. The last two tenths crater because the final 44 rollouts are **42× `rollout_error`** (all reward 0.1) — the env/trainer stack died at the tail. Drop that band and the curve is flat-ish around 0.40, no learning trend.
+
+**Zero-variance groups: 11/54 (20%).** Not the bottleneck — most groups still produce GRPO advantage, so difficulty filtering isn't the priority here.
+
+**Root cause of the model failures: the `call_tool` wrapper is not understood.** Real MCP tools must be invoked via `call_tool(name=..., arguments=...)`; only `call_tool`/`close_session`/`list_tools` are directly callable. The model repeatedly fails this and gives up. Triage of the 166 agent_error+incomplete rollouts: `proper_wrapper` 69, `direct_mcp_names` 61, `no_tool_calls` 36.
+
+- **direct_mcp_names (61).** Model calls the MCP tool by name. Signature, `notes_knowledge_management_1#5`: after `list_tools` it calls `create_database` directly → `{'error': "Unknown tool 'create_database'. The only tools you can call directly are ['call_tool','close_session','list_tools']"}`. Wasted turns, then surrender.
+- **no_tool_calls / giving up (36).** Model reads the tool list, sees only the 3 wrapper tools as directly callable, and concludes the task is impossible. `it_asset_management_1#8`: *"The tools available (call_tool, close_session, list_tools) do not support direct manipulation of device assignments... No function exists..."* — then stops or calls `close_session` (→ the 35 `episode_already_done`).
+
+**Scope of the give-up pathology: 92/422 (22%)** of rollouts end on an explicit "not available / cannot be completed / does not exist" message. This single misunderstanding bleeds across buckets — `episode_already_done` (premature close_session), `direct_mcp_names`, `no_tool_calls`, and many `incomplete`.
+
+**Truncation (`max_tokens`) is minor: 35/422** end with an empty final assistant message. Not the dominant problem.
+
+**Worst scenarios** (mean ~0.05–0.10, near-total failure): `membership_management_4` 0.05, `it_asset_management_1` 0.075, `hr_system_1` 0.075, `healthcare_patient_portal_5` 0.083, plus a long tail of finance/booking/CRM tasks at 0.088–0.10. **Best:** `clinic_management_2` 1.00, `team_collaboration_1`/`gaming_2` 0.89, `content_bookmark_management_1` 0.875.
+
+**Recommended fixes, in order.**
+1. Fix the system prompt / tool docs so the model uses `call_tool(name, arguments)` from `list_tools` output instead of calling tool names directly or declaring the task impossible. This is the single highest-leverage change (~22% of rollouts surrender on it).
+2. Investigate the tail `rollout_error` burst (last 44 rollouts) — env server / trainer stability, not the model.
+3. Reduce the scoring-failure band (server_error/judge_error/no_verifier = 55 rollouts forced to 0.1) so reward reflects the policy.
