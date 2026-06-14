@@ -51,8 +51,10 @@ os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 
 import argparse
 import asyncio
+from collections import Counter
 import json
 import logging
+import statistics
 from datetime import date
 
 from datasets import Dataset
@@ -283,8 +285,10 @@ class AWMEnvironment:
 # Set in main() to <output_dir>/rollouts.jsonl; the worker appends one JSON
 # line per finished rollout. Only rank 0 runs the worker, so no write races.
 TRAJECTORY_FILE = None
+CALIBRATION_FILE = None
 
 _REWARD_EMA_ALPHA = 0.1  # ~20-group (10-step) smoothing window
+_MODEL_OUTCOME_STATUSES = {"complete", "incomplete", "agent_error", "format_violation"}
 
 
 class AWMRolloutWorker(AsyncRolloutWorker):
@@ -299,6 +303,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rollout_rewards: dict[int, float] = {}
+        self._rollout_statuses: dict[int, str] = {}
         self.reward_funcs = [self._verifier_reward]
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
@@ -308,6 +313,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         samples = await super()._score_group(group)
         if not samples:
             return samples
+        self._save_calibration(group, samples)
         group_reward = sum(s.metrics["reward"] for s in samples) / len(samples)
         self._reward_ema = (
             group_reward
@@ -359,6 +365,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # marked failed and check_health doesn't abort the whole run.
                     reward, status = 0.1, "rollout_error"
                 self._rollout_rewards[id(completion)] = reward
+                self._rollout_statuses[id(completion)] = status
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
@@ -375,6 +382,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # Keep the partial completion so the advantage applies to the tokens
                 # generated up to the violation; skip the judge entirely.
                 self._rollout_rewards[id(completion)] = -1.0
+                self._rollout_statuses[id(completion)] = "format_violation"
                 env.close_session()
                 self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
@@ -394,6 +402,41 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         }
         with open(TRAJECTORY_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+
+    def _save_calibration(self, group, samples):
+        statuses = [self._rollout_statuses.pop(id(completion)) for completion in group.completions]
+        if CALIBRATION_FILE is None:
+            return
+
+        status_counts = Counter(statuses)
+        rewards = [sample.metrics["reward"] for sample in samples]
+        valid_rollouts = sum(status in _MODEL_OUTCOME_STATUSES for status in statuses)
+
+        if valid_rollouts == 0:
+            classification = "infrastructure_failure"
+        elif valid_rollouts < len(statuses):
+            classification = "uncertain"
+        elif statistics.pstdev(rewards) > 0:
+            classification = "learnable"
+        elif all(status == "complete" for status in statuses):
+            classification = "mastered"
+        else:
+            classification = "model_misbehavior"
+
+        record = {
+            "scenario": group.reward_kwargs["scenario"][0],
+            "task_idx": group.reward_kwargs["task_idx"][0],
+            "task": group.prompt[-1]["content"],
+            "model_version": group.model_version,
+            "num_rollouts": len(rewards),
+            "mean_reward": statistics.fmean(rewards),
+            "reward_std": statistics.pstdev(rewards),
+            "status_counts": dict(status_counts),
+            "valid_rollouts": valid_rollouts,
+            "classification": classification,
+        }
+        with open(CALIBRATION_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     def _verifier_reward(self, completions, **kwargs):
         rewards = []
@@ -517,9 +560,10 @@ def main() -> None:
     wandb.login()
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
-    global TRAJECTORY_FILE
+    global TRAJECTORY_FILE, CALIBRATION_FILE
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
+    CALIBRATION_FILE = os.path.join(args.output_dir, "calibration.jsonl")
 
     dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
 
