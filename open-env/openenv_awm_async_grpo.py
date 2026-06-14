@@ -169,23 +169,49 @@ class AWMEnvironment:
         )
 
     def list_tools(self) -> str:
-        """List the MCP tools available in the current environment.
+        """Discover every MCP tool available for this task. Call this FIRST.
+
+        This returns the catalog of domain tools (e.g. `create_database`,
+        `update_status`) that actually perform the work. These tools are NOT
+        directly callable — `list_tools` and `call_tool` are the only tools you
+        can invoke directly. Each entry you get back is something you run by
+        passing its name to `call_tool`, not by emitting a tool call of that name.
+
+        Always call this before deciding what to do — and before ever concluding
+        that an operation is unavailable. Every task here is achievable with these
+        tools, so if you don't see an obvious match, re-read the list for a tool
+        that does the job under a different name or a combination of tools.
 
         Returns:
-            A human-readable description of every available tool.
+            A human-readable catalog: for each tool, its name, description, and
+            parameters (name, type, whether required). Use these names and
+            parameter names verbatim as the `tool_name` and `arguments` you pass
+            to `call_tool`.
         """
         result = self.env.step(ListToolsAction())
         return format_tools(result.observation.tools)
 
     def call_tool(self, tool_name: str, arguments: dict) -> str:
-        """Call one MCP tool by name.
+        """Invoke one MCP tool from `list_tools`. This is the ONLY way to run them.
+
+        The domain tools returned by `list_tools` cannot be called directly — you
+        run every one of them through this wrapper. To run a tool named
+        `create_database`, do NOT emit a tool call named `create_database`;
+        instead call:
+            call_tool(tool_name="create_database", arguments={"name": "...", ...})
+        Emitting a tool call named after the domain tool fails with an
+        "Unknown tool" error; always wrap it in `call_tool`.
 
         Args:
-            tool_name: The name of the tool to call (from list_tools).
-            arguments: A JSON object of arguments for the tool.
+            tool_name: Exact name of the domain tool to run, copied verbatim from
+                the `list_tools` catalog (e.g. "create_database").
+            arguments: JSON object of arguments for that tool, with keys matching
+                the parameter names shown for it in `list_tools`. Pass {} if the
+                tool takes no parameters.
 
         Returns:
-            The tool's text response.
+            The tool's text response (an error string is returned, not raised, if
+            the call is rejected — read it and retry with a corrected call).
         """
         if not isinstance(arguments, dict):
             arguments = {}
