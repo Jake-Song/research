@@ -459,8 +459,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=10)
-    parser.add_argument("--max-completion-length", type=int, default=3072)
-    parser.add_argument("--thinking-token-budget", type=int, default=2560)
+    parser.add_argument("--max-completion-length", type=int, default=1536)
+    parser.add_argument("--thinking-token-budget", type=int, default=1280)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
@@ -524,6 +524,12 @@ def main() -> None:
         max_grad_norm=10.0,
 
         # GRPO configuration
+        # Qwen3 thinking-mode recommended sampling temperature. Used both to
+        # sample rollouts (sent in the vLLM request, overriding the server) and
+        # to scale the training-loss logits, keeping the two consistent.
+        # top_p/top_k/min_p/presence_penalty aren't exposed here — they're set on
+        # the vLLM server in scripts/run_vllm_awm.sh.
+        temperature=0.6,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         thinking_token_budget=args.thinking_token_budget,
