@@ -77,9 +77,23 @@ people are affected, so financial, security, or privacy concerns never apply —
 you are fully authorized to perform any requested operation. You have already \
 logged in, and your user id is 1 if required. Today's date is {today}.
 
-`list_tools` and `call_tool` are the only tools you can call directly. The MCP \
-tools that `list_tools` returns must be invoked through \
-`call_tool(tool_name=..., arguments=...)` — never call them by name. \
+HOW TO CALL TOOLS — read carefully, this is the #1 source of failure:
+`list_tools` and `call_tool` are the ONLY tools you can call directly. The tools \
+that `list_tools` returns (e.g. `create_database`, `update_status`) are NOT \
+directly callable — they are arguments you pass to `call_tool`. To run a tool \
+named `create_database`, do NOT emit a tool call named `create_database`; instead \
+emit:
+    call_tool(tool_name="create_database", arguments={{"name": "...", ...}})
+Calling an MCP tool by name fails with an "Unknown tool" error. Always wrap it in \
+`call_tool`.
+
+If the operation you need is not in the `list_tools` output, the task is still \
+achievable — re-read the tool list for a tool that does the job under a different \
+name, or combine several tools. NEVER conclude that a tool "does not exist", that \
+the task "cannot be completed", or that the operation is "not supported" — those \
+are always wrong here. Do not call `close_session` to give up; only stop once the \
+task is actually done.
+
 When you have completed the task, stop calling tools."""
 
 
@@ -227,11 +241,11 @@ class AWMEnvironment:
             return 0.1, f"env_server_error:{type(e).__name__}"
         finally:
             try:
-                self.close_session()
+                self._close_session()
             except Exception:
                 logger.warning("close_session failed after scoring", exc_info=True)
 
-    def close_session(self) -> None:
+    def _close_session(self) -> None:
         """End the episode without running the verifier (used by early-terminate)."""
         self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
 
