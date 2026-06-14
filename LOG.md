@@ -111,3 +111,140 @@ At 2 groups/step, a 24-step run processes ~48 groups. The current ~1000-row data
 1. Fix the system prompt / tool docs so the model uses `call_tool(name, arguments)` from `list_tools` output instead of calling tool names directly or declaring the task impossible. This is the single highest-leverage change (~22% of rollouts surrender on it).
 2. Investigate the tail `rollout_error` burst (last 44 rollouts) — env server / trainer stability, not the model.
 3. Reduce the scoring-failure band (server_error/judge_error/no_verifier = 55 rollouts forced to 0.1) so reward reflects the policy.
+
+## 2026-06-14 (21:51) — rollouts.jsonl (post system-prompt + Qwen3-sampling fix)
+
+Follow-up to the 18:05 run, after (a) rewriting `SYSTEM_PROMPT` + the `list_tools`/
+`call_tool` docstrings to hammer the wrapper pattern and forbid giving up, and
+(b) Qwen3 thinking-mode sampling (temp 0.6 / top_p 0.95 / top_k 20 / min_p 0 /
+presence_penalty 1.5 server-side, temp 0.6 trainer-side).
+
+**Big win. Mean reward 0.354 → 0.547** (473 rollouts). Histogram: `1.0`×236 (was
+124), `0.1`×228, `0.0`×9 (was 43). The give-up pathology is essentially solved:
+
+| metric | 18:05 | 21:51 |
+|---|---|---|
+| mean reward | 0.354 | **0.547** |
+| complete | 124 | **236** |
+| agent_error (0.0) | 43 | **9** |
+| "unavailable/cannot complete" endings | 92 (22%) | **9 (2%)** |
+| no_tool_calls refusals | 36 | **9** |
+| episode_already_done (premature close_session) | 35 | **0** |
+| rollout_error (tail infra) | 42 | **5** |
+
+The system-prompt/docstring changes did exactly what they targeted: the model no
+longer declares tasks impossible or closes the session to bail.
+
+**The trailing "0.1" in reward-by-tenth is an artifact** — it's a 3-row remainder
+bucket, not a collapse. The last full tenth is 0.73; the tail rollout_errors are
+down to 5.
+
+**Remaining work — failures are now content errors, not mechanics.** Of 178
+agent_error+incomplete: `proper_wrapper` **110** (correct call mechanics, wrong
+content — grounding/logic), `direct_mcp_names` **59**, `no_tool_calls` 9.
+- `direct_mcp_names` (59) persists: the model still intermittently emits a tool
+  call named after a domain tool (e.g. `get_form_by_title`, `list_providers`)
+  instead of wrapping it, usually mixing correct `call_tool` calls in the same
+  rollout — a slip, not a misunderstanding. Lower-priority than before but not gone.
+- `proper_wrapper` (110) is the new frontier: mechanics right, outcome wrong.
+  Needs trajectory-level inspection of grounding (dates/ids/filters) rather than
+  prompt tweaks.
+
+**Minor:** truncation (empty final assistant) ticked up 35→47 (8%→10%) — worth
+watching given presence_penalty=1.5 may lengthen/diverge generations. Scoring-
+failure band (server_error 23, judge_error 15, no_verifier 16) roughly unchanged.
+
+**Zero-variance groups 26/63 (41%, up from 20%)** — but now 10 are all-1.0
+(mastered) vs 16 all-0.1, i.e. driven by tasks the model now solves perfectly, not
+by uniform failure. Worst scenarios still ~0.09–0.10 (booking_platform_4,
+iot_smart_infrastructure_management_1, banking_4, survey_forms_platform_1,
+form_builder_1, practice_management_4); 6 scenarios now at mean 1.000.
+
+### Drill-down — the 110 proper_wrapper content failures (21:51 run)
+
+Mechanics are correct (only `list_tools`/`call_tool`); the outcome is wrong. They
+split into three buckets:
+
+**1. Premature completion / under-acting — the dominant failure (~72).** Median 2
+tool calls; **87/110 make ≤1 `call_tool`**. The model does the single most
+obvious mutation that name-matches the task, gets a success response, and declares
+done — **63/110 final messages explicitly claim success** ("has been successfully
+updated… The task is complete"), and of the 59 single-call cases, 39 claim success.
+The verifier wants the *full* multi-part outcome. Examples:
+- `billing_and_invoicing_2#7`: task = configure a dunning *sequence* (retry 3× at
+  2-day intervals, set `past_due` after first failure, `canceled` after all retries,
+  triggered by a `payment_failed` webhook). Model calls `create_dunning_policy`
+  once and stops — never wires the webhook trigger or retry schedule.
+- `form_builder_1#4`: task = change the submission status `in_review`→`approved`
+  AND record an approval_step. Model patches the approval_step_instance only,
+  misses the submission-status change, and also takes `id:1` as "oldest" without
+  ordering. Wrong/partial entity.
+
+**2. Trust-an-empty-result (38/110, overlaps #1).** The model calls one convenience
+query tool, gets `[]`/null, and concludes "no data" instead of computing it from
+the underlying tools. `messaging_communications_1#9`: calls
+`get_team_performance_last_30_days` → `{"teams": []}` and gives up on the whole
+per-team report rather than aggregating from conversations.
+
+**3. Runaway thinking / truncated before acting (~20).** 28 PW failures make **zero**
+`call_tool`; **20 of those end inside an unclosed `<think>` block** — the model
+spends the full thinking budget reasoning ("First, I need to find the form…") and
+is cut off before emitting any tool call. This is the `thinking_token_budget`
+(1280) / `max_completion_length` ceiling biting on the planning-heavy tasks, and
+likely the source of the truncation tick-up; presence_penalty=1.5 may lengthen
+these. These are infra/budget, not reasoning, failures.
+
+**Takeaways.** Buckets 1+2 (~90%) are a single behavior: the model stops too early
+and over-claims success. This won't move with sampling — candidate fixes: (a) a
+system-prompt rule to decompose multi-part tasks and verify each required mutation
+before stopping (and never trust an empty query result — fall back to lower-level
+tools); (b) consider a reward/verifier signal that exposes partial completion so
+GRPO can push toward finishing. Bucket 3 (~20) argues for a higher
+`thinking_token_budget` (or larger `max_completion_length`) on planning-heavy
+scenarios. Whole-group failures (form_builder_1, messaging_communications_1,
+practice_management_7, dating_2, billing_and_invoicing_2 all 8/8) are the place to
+validate any fix.
+
+### Zero-variance (std=0) group inspection (21:51 run)
+
+26/63 groups have identical rewards across all 8 generations → **zero GRPO
+advantage, no gradient (~41% of compute produces no learning signal)**. They split:
+
+**all-1.0 — mastered, too easy (10 groups):** bookmark_manager_2#4,
+content_bookmark_management_1#1, e_commerce_10#2, e_commerce_marketplace_9#0,
+job_search_and_recruiting_1#3, peer_to_peer_payments_1#7, professional_networking_9#7,
+social_media_4#5, task_management_5#7, team_collaboration_1#8.
+
+**all-0.1 (16 groups) — two distinct causes, must NOT be lumped together:**
+
+- **Scoring/infra dead tasks (~6, plus 2 mixed) — the model is NOT at fault.**
+  banking_4#2 (`no_verifier`×8), tutoring_education_marketplace_1#2
+  (`no_verifier`×8), practice_management_4#3 (`judge_error`×8),
+  tournament_management_1#0 (`server_error`×8), marketplace_8#2 &
+  workflow_automation_3#7 (`rollout_error`). Inspection shows the model often
+  **completes these correctly** — banking_4#2 sends the Zelle transfer and reports
+  success; practice/tutoring update the records and report success — but the task
+  has no registered verifier / the judge errors / the env step crashes, so reward
+  is force-set to 0.1 regardless. These can NEVER produce signal and are scored
+  unfairly. They also drag their scenarios into the "worst" list artificially
+  (banking_4, tutoring_education_marketplace_1 look like ~0.1 failures but aren't).
+  tournament_management_1#0 is genuinely broken: `create_game` itself returns an
+  internal server error.
+
+- **Genuine uniform model failure (~8) — too hard, all 8 truly incomplete.**
+  billing_and_invoicing_2#7, dating_2#3, form_builder_1#4,
+  membership_management_4#2, messaging_communications_1#9, practice_management_7#1,
+  stock_trading_3#5, ticketing_and_access_management_1#3. These are the multi-part
+  / premature-stop content failures from the proper_wrapper drill-down.
+
+**Implications.**
+1. **Drop the scoring/infra dead tasks from the training set** (or fix their
+   verifiers). They consume a full group's compute, give zero gradient, and
+   penalize correct behavior — the worst category.
+2. **Difficulty-filter** the all-1.0 (too easy) and uniform-fail (too hard) groups
+   so generations concentrate on tasks with reward variance. ~41% zero-variance is
+   the biggest single drag on training efficiency right now — a bigger lever than
+   any per-trajectory prompt tweak.
+3. The "worst scenarios" ranking is contaminated by unverifiable tasks; recompute
+   scenario means after excluding `no_verifier`/`judge_error`/`server_error` before
+   drawing difficulty conclusions.
