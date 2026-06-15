@@ -308,20 +308,39 @@ task_management_5.
 
 ## Analysis of `rollouts.jsonl` (2026-06-16)
 
-558 rollouts, 57 scenarios. **Headline: ~39% of rollouts (217/558) are infra/scoring failures, not the model's fault — and they cluster as two outages bracketing a healthy middle. The reported mean reward (0.411) badly understates the model; the model-attributable mean is 0.609.**
+558 rollouts, 57 scenarios, mean reward 0.411. **Headline: most of the "infra failure" mass is benign — the run-start band is the verifier deliberately being off during warm-up, and the tail band is rollouts force-ended at shutdown. The one real issue is GRPO efficiency: ~28% of full prompt groups are zero-variance and contribute no gradient.** (Revises an earlier draft of this entry that wrongly read the two bands as service outages, and that quoted a `20/50` zero-variance figure that was never computed.)
 
-### Two infra outages
-- **Run start (lines 0–109): 102 `judge_error` + 14 `no_verifier`.** The judge/verifier service wasn't up yet — the first ~20% of the run scored ~0.1 regardless of what the model did.
-- **Run tail (lines 495–557): 42 `rollout_error` + 8 `server_error`.** The env server fell over with **HTTP 500 Internal Server Error** — 330 tool results across the file contain "500", concentrated here. Example (`tournament_management_1#0`): every `create_game` call returns `Status code: 500. Response: Internal Server Error`; the model retries with reworded args, reasons "why is it still 500ing", and burns the rollout. This is the env-side failure consistent with the httpx client/event-loop teardown issue under discussion.
-- **Middle (lines ~110–494): healthy** — `complete`/`incomplete` dominate, infra noise near zero.
+### Status noise — explained, not problems
+- **Run start: front-loaded `judge_error` (129 total, range 0–486 but concentrated at the head) + `no_verifier` (24, range 3–297).** This is the verifier being **intentionally turned off at the start of the run**, not a service that failed to come up. First two tenths score ~0.1 by construction; the band tapers as the verifier comes online. Expected, not a problem.
+- **Run tail (lines 516–557): 42 `rollout_error`.** These are active rollout workers **force-ended at run shutdown before they finished** — a teardown artifact, not env failure. Not an issue.
+- **`server_error`: 22, scattered across lines 175–515** (not just the tail). Real but minor — likely a database init error. Worth a look but not what's gating the run. *(Note: an earlier draft called this "8"; the actual count is 22, spread through the middle.)*
+- **`agent_error`: 12, spread across scenarios (lines 185–513).** Tiny and diffuse — not a systemic model bug this run.
 
-### Real (model-attributable) signal — excluding infra failures
-- 341 clean rollouts: **mean 0.609**, statuses complete=194, incomplete=135, agent_error=12. Histogram: 1.0×194, 0.1×135, 0.0×12.
-- Clean reward by tenth: `[0.81, 0.71, 0.51, 0.36, 0.52, 0.81, 0.84, 0.57, 0.49, 0.44, 1.0]` — noisy, no clear upward slope. Hard to read a learning trend through this much env instability.
-- **Zero-variance clean groups: 20/50 (40%)** — a large share of GRPO groups have identical rewards across all generations and contribute no gradient. Difficulty filtering would help.
-- `agent_error` is small (12) and spread across scenarios (enterprise_admin_portal_1, booking_marketplace_5 lead with 3 each) — not a systemic model bug this run.
+### The real issue — zero-variance groups
+Grouping rewards by `(scenario, task_idx)`: groups with identical reward across all generations have zero GRPO advantage → no gradient. This explains a flat/noisy reward curve far better than any per-trajectory pathology.
+- **Full groups (size 8 or 16): 12/43 zero-variance (28%)** — the honest measure, excluding the force-ended tail partials.
+- **All groups incl. truncated partials: 20/57 (35%)** — the 8 extra are small force-ended groups (size 3–7) that read as zero-variance on too few samples, so they're unreliable; prefer the 28% figure.
+- Split (full groups): **8 stuck-hard (all-0.1, never solved)** + **4 trivial (all-1.0, always solved)**. Both ends are wasted compute.
+  - Stuck-hard: banking_4#2, billing_and_invoicing_2#7, dating_2#3, form_builder_1#4, messaging_communications_1#9, practice_management_4#3, survey_forms_platform_1#9, tutoring_education_marketplace_1#2.
+  - Trivial: clinic_management_2#9, healthcare_telehealth_1#6, identity_and_access_management_1#2, restaurant_operations_1#4.
+
+### Difficulty calibration
+Per-group solve-rate (frac of generations scoring 1.0) over the 43 full groups:
+
+| solve-rate | groups | % |
+|---|---|---|
+| 0% (never) | 10 | 23% |
+| (0,25%) | 7 | 16% |
+| [25,50%) | 10 | 23% |
+| [50,75%) | 4 | 9% |
+| [75,100%) | 8 | 19% |
+| 100% (always) | 4 | 9% |
+
+- **Mean group solve-rate = 0.40**, close to the GRPO-ideal ~0.5 — the prompt set is *not* badly miscalibrated; the model sits in the productive zone.
+- **67% of groups (29/43) have solve/fail spread** → usable advantage signal; only 33% degenerate.
+- **Degeneracy is asymmetric: 23% never-solve vs 9% always-solve** — dead-hard tasks drag ~2.5× harder than trivial ones. (Note: "never-solve" is 10 groups but only 8 are strictly zero-variance; the other 2 mix 0.1/0.0, a spurious fail-vs-fail gradient.) So difficulty filtering should weight toward **pruning/replacing the 10 never-solved tasks** over the 4 trivial ones.
 
 ### Takeaways
-1. The run is partly wasted: ~39% of rollouts carry forced-0.1 infra rewards that pollute the advantage signal. Fix judge readiness (gate run start on judge health) and env-server stability (the tail 500s) before reading any reward curve.
-2. The `call_tool` bypass bug that dominated the 2026-06-11 run is **not** the story here — mechanics look fine; failures are infra + genuine task incompleteness.
-3. 40% zero-variance groups remains a standing efficiency problem → difficulty filtering.
+1. **Difficulty-filter the zero-variance groups (28% of full groups)** — drop the always-fail and always-pass prompts so compute lands on groups with reward spread. This is the single highest-value change for GRPO efficiency.
+2. The run-start (verifier off) and tail (force-end) bands are **expected/benign** — don't read them as regressions or outages.
+3. `server_error` (22, likely DB init) is a real-but-minor follow-up; `agent_error` (12) and the `call_tool` bypass bug are non-issues this run.

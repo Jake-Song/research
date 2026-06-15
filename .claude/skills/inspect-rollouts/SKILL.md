@@ -40,7 +40,34 @@ for s, rs in sorted(scen.items(), key=lambda kv: sum(kv[1])/len(kv[1])):
 EOF
 ```
 
-Also report the exact reward-value histogram (`collections.Counter` over rewards) — the 0.0 vs 0.1 split distinguishes "failed" from "partial" — and the **zero-variance group count**: group rewards by `(scenario, task_idx)` and count groups where all rewards are identical. Those groups have zero GRPO advantage and contribute no gradient; if a large share (e.g. >50%) is zero-variance, say so — it explains a flat reward curve better than any per-trajectory pathology, and points to difficulty filtering as the fix.
+Also report the exact reward-value histogram (`collections.Counter` over rewards) — the 0.0 vs 0.1 split distinguishes "failed" from "partial" — and the **zero-variance group count**: group rewards by `(scenario, task_idx)` and count groups where all rewards are identical. Those groups have zero GRPO advantage and contribute no gradient; if a large share is zero-variance, say so — it explains a flat reward curve better than any per-trajectory pathology, and points to difficulty filtering as the fix.
+
+**Count zero-variance over FULL groups only** (size `--num-generations`, typically 8, or a multiple like 16 when a task is resampled across steps). Groups whose size isn't a clean multiple are force-ended tail partials from run shutdown — they read as zero-variance on too few samples and inflate the count. Report both numbers but lead with the full-group fraction. Example pitfall: an all-groups count of 20/57 (35%) dropped to 12/43 (28%) once the 14 truncated partials were excluded.
+
+### Part 3b: Check difficulty calibration
+
+Zero-variance counts *strictly identical* rewards; calibration is the fuller picture. Treat reward as solve/fail (1.0 = solved, else not) and compute each full group's **solve-rate**, then bucket:
+
+```bash
+python3 - <<'EOF'
+import json, collections, statistics
+g=collections.defaultdict(list)
+for l in open("rollouts.jsonl"):
+    r=json.loads(l); g[(r["scenario"],r["task_idx"])].append(r["reward"])
+full={k:v for k,v in g.items() if len(v) in (8,16)}  # adjust to --num-generations
+rates=[sum(x==1.0 for x in v)/len(v) for v in full.values()]
+b=collections.Counter()
+for s in rates:
+    b["never (0%)" if s==0 else "always (100%)" if s==1 else
+      "(0,25%)" if s<.25 else "[25,50%)" if s<.5 else "[50,75%)" if s<.75 else "[75,100%)"]+=1
+for k in ["never (0%)","(0,25%)","[25,50%)","[50,75%)","[75,100%)","always (100%)"]:
+    print(f"  {k:14s} {b[k]:3d}  {b[k]/len(full)*100:4.0f}%")
+useful=sum(0<s<1 for s in rates)
+print(f"useful (spread)={useful}/{len(full)} ({useful/len(full)*100:.0f}%)  mean solve-rate={statistics.mean(rates):.2f} (GRPO-ideal ~0.5)")
+EOF
+```
+
+Report: mean solve-rate (near 0.5 = well-calibrated), the useful/degenerate split, and the **never-vs-always asymmetry** — more never-solved than always-solved means dead-hard tasks are the bigger drag, so filtering should weight toward pruning/replacing those over the trivial ones.
 
 Then drill into whatever the user actually asked about.
 
