@@ -303,3 +303,25 @@ task_management_5.
 3. **Target `proper_wrapper` premature-stop / content failures** (decompose
    multi-part tasks, verify each mutation, don't trust empty query results). The
    `direct_mcp_names` slip is now self-recovering and lower priority.
+
+---
+
+## Analysis of `rollouts.jsonl` (2026-06-16)
+
+558 rollouts, 57 scenarios. **Headline: ~39% of rollouts (217/558) are infra/scoring failures, not the model's fault — and they cluster as two outages bracketing a healthy middle. The reported mean reward (0.411) badly understates the model; the model-attributable mean is 0.609.**
+
+### Two infra outages
+- **Run start (lines 0–109): 102 `judge_error` + 14 `no_verifier`.** The judge/verifier service wasn't up yet — the first ~20% of the run scored ~0.1 regardless of what the model did.
+- **Run tail (lines 495–557): 42 `rollout_error` + 8 `server_error`.** The env server fell over with **HTTP 500 Internal Server Error** — 330 tool results across the file contain "500", concentrated here. Example (`tournament_management_1#0`): every `create_game` call returns `Status code: 500. Response: Internal Server Error`; the model retries with reworded args, reasons "why is it still 500ing", and burns the rollout. This is the env-side failure consistent with the httpx client/event-loop teardown issue under discussion.
+- **Middle (lines ~110–494): healthy** — `complete`/`incomplete` dominate, infra noise near zero.
+
+### Real (model-attributable) signal — excluding infra failures
+- 341 clean rollouts: **mean 0.609**, statuses complete=194, incomplete=135, agent_error=12. Histogram: 1.0×194, 0.1×135, 0.0×12.
+- Clean reward by tenth: `[0.81, 0.71, 0.51, 0.36, 0.52, 0.81, 0.84, 0.57, 0.49, 0.44, 1.0]` — noisy, no clear upward slope. Hard to read a learning trend through this much env instability.
+- **Zero-variance clean groups: 20/50 (40%)** — a large share of GRPO groups have identical rewards across all generations and contribute no gradient. Difficulty filtering would help.
+- `agent_error` is small (12) and spread across scenarios (enterprise_admin_portal_1, booking_marketplace_5 lead with 3 each) — not a systemic model bug this run.
+
+### Takeaways
+1. The run is partly wasted: ~39% of rollouts carry forced-0.1 infra rewards that pollute the advantage signal. Fix judge readiness (gate run start on judge health) and env-server stability (the tail 500s) before reading any reward curve.
+2. The `call_tool` bypass bug that dominated the 2026-06-11 run is **not** the story here — mechanics look fine; failures are infra + genuine task incompleteness.
+3. 40% zero-variance groups remains a standing efficiency problem → difficulty filtering.
