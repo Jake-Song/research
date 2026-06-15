@@ -616,7 +616,7 @@ def main() -> None:
         # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
-
+        heartbeat_stale_after_s=600.0,
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
         # How long the trainer waits on an empty rollout queue before stopping the
