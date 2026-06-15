@@ -248,3 +248,58 @@ social_media_4#5, task_management_5#7, team_collaboration_1#8.
 3. The "worst scenarios" ranking is contaminated by unverifiable tasks; recompute
    scenario means after excluding `no_verifier`/`judge_error`/`server_error` before
    drawing difficulty conclusions.
+
+## 2026-06-15 (19:35) — rollouts.jsonl (repo root, 814 rollouts)
+
+**Best run so far: mean reward 0.549** (0.430 → 0.549), **0.631 excluding the
+scoring-failure band**. Histogram: `1.0`×408, `0.1`×391, `0.0`×15. Statuses:
+complete 408, incomplete 266, agent_error 15, plus a **scoring-failure band of 125
+(15%)**: judge_error 38, server_error 38, rollout_error 33, no_verifier 16.
+**The refusal pathology is solved — `no_tool_calls` 15 → 1.**
+
+**The apparent end-of-run decline is an infra artifact, not regression.** Reward by
+tenth: `0.59 0.45 0.49 0.64 0.42 0.80 0.52 0.69 0.52 0.38 0.33`. The last fifth
+carries **33 `rollout_error` + the bulk of the scoring failures** (tenth 9 alone:
+36/81 scoring failures), forcing those to 0.1. The run did **not** hard-crash — the
+final rows are ordinary `incomplete`s. Strip the scoring band and the curve is
+healthy around 0.6.
+
+**Zero-variance groups 40/104 (38%, down from 51%):** 15 all-1.0 (mastered) +
+25 all-0.1. Improving, but still ~38% of compute yields no GRPO gradient.
+
+**`direct_mcp_names` recovery is now clean (improvement over the 16:51 run).**
+Triage of the 266 incompletes: `proper_wrapper` 146, `direct_mcp_names` 119,
+`no_tool_calls` 1; truncated 41. `direct_mcp_names` is still high *and bursty*
+(per-tenth share swings 5/30 → 27/40), but the failure mode changed: the model
+calls an MCP tool by name, gets `{'error': "Unknown tool '...'. The only tools you
+can call directly are ['call_tool','list_tools']."}`, and **self-corrects with a
+valid structured `call_tool`** — no more malformed `<tool_call>` text / broken JSON.
+So these are now a wasted-turn slip, not a fatal misunderstanding, and the resulting
+0.1s are usually *content* failures, not mechanics. Example, `survey_forms_platform_1#9`:
+slips on `get_form_by_title`, recovers, calls `seed_synthetic_responses` → returns
+`{"created_responses": 50, "aggregate_counts": {}}` — seeded the rows but the
+`distribution_config` never applied, so the verifier marks it incomplete.
+
+**`proper_wrapper` (146, 55%) is the real frontier** — same premature-stop /
+wrong-content pattern as before (mechanics right, outcome partial). These plus the
+content-failure direct_mcp slips are where the reward ceiling now sits.
+
+**Worst scenarios (all 8/8 fail, mean ≤0.10):** b2b_workflow_line_of_business_app_1,
+practice_management_7, stock_trading_3, task_management_16, banking_4,
+survey_forms_platform_1, form_builder_1, practice_management_4,
+messaging_communications_1, tutoring_education_marketplace_1, crm_6. Several are
+repeat offenders / known scoring-failure dead tasks (banking_4, practice_management_4,
+tutoring_education_marketplace_1). **Mastered (1.000):** team_collaboration_1,
+clinic_management_2, live_streaming_1, peer_to_peer_payments_1, compliance_management_1,
+task_management_5.
+
+**Recommended, in order.**
+1. **Stabilize infra — the scoring-failure band rose to 15%** (judge_error 38,
+   server_error 38, rollout_error 33). The rollout_error tail burst is what makes the
+   run *look* like it's regressing; fixing env/judge stability both cleans the signal
+   and removes the fake decline.
+2. **Difficulty-filter the 38% zero-variance groups**, and drop/repair the known
+   scoring-failure dead tasks (banking_4, practice_management_4, tutoring_*).
+3. **Target `proper_wrapper` premature-stop / content failures** (decompose
+   multi-part tasks, verify each mutation, don't trust empty query results). The
+   `direct_mcp_names` slip is now self-recovering and lower priority.
