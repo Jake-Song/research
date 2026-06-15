@@ -1,8 +1,11 @@
 import json
 import sys
 
-path = sys.argv[1]
-target = int(sys.argv[2]) if len(sys.argv) > 2 else None
+args = sys.argv[1:]
+brief = "-b" in args
+args = [a for a in args if a != "-b"]
+path = args[0]
+target = int(args[1]) if len(args) > 1 else None
 with open(path) as f:
     for i, line in enumerate(f, 1):
         line = line.strip()
@@ -10,5 +13,8 @@ with open(path) as f:
             continue
         if target is not None and i != target:
             continue
-        print(json.dumps(json.loads(line), indent=2, ensure_ascii=False))
+        r = json.loads(line)
+        if brief:
+            r = {k: r[k] for k in ("scenario", "task_idx", "reward", "status")}
+        print(json.dumps(r, indent=2, ensure_ascii=False))
         print("-" * 80)
