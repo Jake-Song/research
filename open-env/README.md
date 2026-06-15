@@ -123,7 +123,7 @@ Defaults live in `parse_args()`. The ones you'll touch most:
 
 | Flag                        | Default                          | Notes                                |
 |-----------------------------|----------------------------------|--------------------------------------|
-| `--model-id`                | `Qwen/Qwen3-4B-Instruct-2507`    | Policy + vLLM model                  |
+| `--model-id`                | `Qwen/Qwen3-4B-Thinking-2507`    | Policy + vLLM model                  |
 | `--env-url`                 | `http://localhost:8899`          | AWM env server                       |
 | `--num-generations`         | `8`                              | Rollouts per prompt (group size)     |
 | `--max-turns`               | `20`                             | Max tool-calling iterations          |

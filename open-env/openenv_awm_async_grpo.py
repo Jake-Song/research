@@ -512,7 +512,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
     parser.add_argument(
         "--model-id",
-        default="Qwen/Qwen3-4B",
+        default="Qwen/Qwen3-4B-Thinking-2507",
         help="Base HF model, or a previous run's output dir / checkpoint-N dir / Hub"
         " repo to warm-start from (continual training). Use a fresh --output-dir.",
     )
@@ -527,7 +527,7 @@ def parse_args() -> argparse.Namespace:
         " this to the sum of previous runs' dataset sizes.",
     )
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=10)
+    parser.add_argument("--max-turns", type=int, default=8)
     parser.add_argument("--max-completion-length", type=int, default=3072)
     parser.add_argument("--thinking-token-budget", type=int, default=2560)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
