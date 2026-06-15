@@ -533,7 +533,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
-    parser.add_argument("--optim", default="adamw_torch")
+    parser.add_argument("--optim", default="adamw_8bit")
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--save-steps", type=int, default=30)
     parser.add_argument("--save-total-limit", type=int, default=1)
