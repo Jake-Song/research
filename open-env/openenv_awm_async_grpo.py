@@ -130,7 +130,7 @@ def format_tools(tools) -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
-MESSAGE_TIMEOUT_S = 600.0
+MESSAGE_TIMEOUT_S = 1200.0
 # reward_type strings the AWM env assigns to tool-call format violations
 # (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
 # The paper terminates the rollout with r_t = -1.0 on any such violation.
@@ -616,7 +616,7 @@ def main() -> None:
         # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
-        heartbeat_stale_after_s=600.0,
+        heartbeat_stale_after_s=1200.0,
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
         # How long the trainer waits on an empty rollout queue before stopping the
