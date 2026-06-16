@@ -277,6 +277,11 @@ class AWMEnvironment:
         """End the episode without running the verifier (used by early-terminate)."""
         await self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
 
+    async def close(self) -> None:
+        """Close the underlying async env client. Called once at worker shutdown so
+        the httpx connections are released while the event loop is still alive."""
+        await self.env.close()
+
 
 # ---------------------------------------------------------------------------
 # Rollout worker — scores each episode out-of-band, reward never in context
