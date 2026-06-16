@@ -147,21 +147,21 @@ class AWMEnvironment:
     def __init__(self, env_url: str):
         # Default message_timeout_s is 60s; the sql verifier's LLM judge can take
         # longer, so bump it to avoid spurious TimeoutErrors during scoring.
-        self.env = AWMEnv(base_url=env_url, message_timeout_s=MESSAGE_TIMEOUT_S).sync()
+        self.env = AWMEnv(base_url=env_url, message_timeout_s=MESSAGE_TIMEOUT_S)
         # Set by call_tool when a tool call hits a format violation; the rollout
         # worker checks it to early-terminate the rollout with reward -1.0.
         self.format_violation = False
         self.scenario = None
         self.task_idx = None
 
-    def reset(self, scenario: str, task_idx: int, **kwargs) -> None:
+    async def reset(self, scenario: str, task_idx: int, **kwargs) -> None:
         # kwargs absorbs the other dataset-row columns (prompt, task, ...).
         # The sql verifier's LLM judge is configured via OPENENV_AWM_LLM_* env
         # vars, which the env's reset() reads automatically.
         self.format_violation = False
         self.scenario = scenario
         self.task_idx = task_idx
-        self.env.reset(
+        await self.env.reset(
             scenario=scenario,
             task_idx=task_idx,
             verifier_mode="sql",
@@ -170,7 +170,7 @@ class AWMEnvironment:
             llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
         )
 
-    def list_tools(self) -> str:
+    async def list_tools(self) -> str:
         """Discover every MCP tool available for this task. Call this FIRST.
 
         This returns the catalog of domain tools (e.g. `create_database`,
@@ -190,10 +190,10 @@ class AWMEnvironment:
             parameter names verbatim as the `tool_name` and `arguments` you pass
             to `call_tool`.
         """
-        result = self.env.step(ListToolsAction())
+        result = await self.env.step(ListToolsAction())
         return format_tools(result.observation.tools)
 
-    def call_tool(self, tool_name: str, arguments: dict) -> str:
+    async def call_tool(self, tool_name: str, arguments: dict) -> str:
         """Invoke one MCP tool from `list_tools`. This is the ONLY way to run them.
 
         The domain tools returned by `list_tools` cannot be called directly — you
@@ -217,7 +217,7 @@ class AWMEnvironment:
         """
         if not isinstance(arguments, dict):
             arguments = {}
-        result = self.env.step(CallToolAction(tool_name=tool_name, arguments=arguments))
+        result = await self.env.step(CallToolAction(tool_name=tool_name, arguments=arguments))
         obs = result.observation
         if getattr(obs, "reward_type", None) in _FORMAT_ERROR_REWARD_TYPES:
             self.format_violation = True
@@ -230,7 +230,7 @@ class AWMEnvironment:
             text = json.dumps(obs.model_dump(), ensure_ascii=False)
         return text[:_MAX_TOOL_RESPONSE_CHARS]
 
-    def _score_rollout(self) -> tuple[float, str]:
+    async def _score_rollout(self) -> tuple[float, str]:
         """Run the verifier on the finished episode. Not exposed to the model.
 
         Uses the "sql" verifier only — the code-augmented LLM-as-Judge that the
@@ -260,7 +260,7 @@ class AWMEnvironment:
             "judge_error"), or "env_error:<ExceptionType>".
         """
         try:
-            r = self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
+            r = await self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
             status = r.observation.reward_type
             if status in ("complete", "incomplete", "agent_error"):
                 return float(r.reward or 0.0), status
@@ -269,13 +269,13 @@ class AWMEnvironment:
             return 0.1, f"env_server_error:{type(e).__name__}"
         finally:
             try:
-                self._close_session()
+                await self._close_session()
             except Exception:
                 logger.warning("close_session failed after scoring", exc_info=True)
 
-    def _close_session(self) -> None:
+    async def _close_session(self) -> None:
         """End the episode without running the verifier (used by early-terminate)."""
-        self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
+        await self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +378,33 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             ctx = completion[:pin_end] + completion[recent_start:]
         return list(prompt) + list(ctx)
 
+    async def _execute_tool_calls(self, tool_calls, tool_dict):
+        # Async override of the base (sync) dispatcher: the AWM env tools are now
+        # coroutines (real async client, no .sync() wrapper), so await them. This lets
+        # the per-turn env round-trips overlap across inflight slots via the event loop
+        # instead of blocking it. Mirrors AsyncRolloutWorker._execute_tool_calls otherwise.
+        tool_messages, n_calls, n_failures = [], 0, 0
+        for tool_call in tool_calls:
+            n_calls += 1
+            function = tool_call["function"]
+            name = function["name"]
+            if name not in tool_dict:
+                n_failures += 1
+                result = {
+                    "error": f"Unknown tool '{name}'. The only tools you can call directly are "
+                    f"{sorted(tool_dict)}."
+                }
+            else:
+                try:
+                    result = tool_dict[name](**function.get("arguments", {}))
+                    if asyncio.iscoroutine(result):
+                        result = await result
+                except Exception as error:
+                    n_failures += 1
+                    result = {"error": str(error)}
+            tool_messages.append({"role": "tool", "name": name, "content": str(result)})
+        return tool_messages, n_calls, n_failures
+
     async def _generate_one(self, prompt, tool_dict):
         # Reimplements AsyncRolloutWorker._generate_one's multi-turn loop so we can
         # early-terminate on a tool-call format violation (the base loop has no such
@@ -418,21 +445,21 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
                 try:
-                    reward, status = await asyncio.to_thread(env._score_rollout)
+                    reward, status = await env._score_rollout()
                 except RuntimeError:
-                    # The worker loop is shutting down (its default executor is closed,
-                    # so to_thread can't submit) — typically at a worker stop/restart or
-                    # phase boundary while this rollout is still in flight. Not a server
-                    # error: the env is fine, the rollout just got caught in teardown and
-                    # its reward is discarded anyway; swallow it so the worker isn't
-                    # marked failed and check_health doesn't abort the whole run.
+                    # The worker loop is shutting down (event loop / env client closing)
+                    # while this rollout is still in flight — typically at a worker
+                    # stop/restart or phase boundary. Not a server error: the env is
+                    # fine, the rollout just got caught in teardown and its reward is
+                    # discarded anyway; swallow it so the worker isn't marked failed
+                    # and check_health doesn't abort the whole run.
                     reward, status = 0.1, "rollout_error"
                 self._rollout_rewards[id(completion)] = reward
                 self._rollout_statuses[id(completion)] = status
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
-            tool_messages, n_calls, n_failures = self._execute_tool_calls(tool_calls, tool_dict)
+            tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
             tool_call_count += n_calls
             tool_failure_count += n_failures
             completion.extend(tool_messages)
@@ -446,7 +473,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # generated up to the violation; skip the judge entirely.
                 self._rollout_rewards[id(completion)] = -1.0
                 self._rollout_statuses[id(completion)] = "format_violation"
-                env.close_session()
+                await env._close_session()
                 self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
             iteration_num += 1
