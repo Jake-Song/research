@@ -418,6 +418,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             classification = "uncertain"
         elif statistics.pstdev(rewards) > 0:
             classification = "learnable"
+        elif all(status == "incomplete" for status in statuses):
+            classification = "all failed"
         elif all(status == "complete" for status in statuses):
             classification = "mastered"
         else:
