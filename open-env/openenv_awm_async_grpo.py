@@ -536,7 +536,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--optim", default="paged_adamw_8bit")
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--save-steps", type=int, default=30)
-    parser.add_argument("--save-total-limit", type=int, default=1)
+    parser.add_argument("--save-total-limit", type=int, default=None)
     parser.add_argument("--logging-steps", type=int, default=1)
     parser.add_argument("--vllm-server-host", default="127.0.0.1")
     parser.add_argument("--vllm-server-port", type=int, default=8000)
