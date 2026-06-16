@@ -302,7 +302,7 @@ class AWMEnvironment:
 
     async def _close_session(self) -> None:
         """End the episode without running the verifier (used by early-terminate)."""
-        await self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": True}))
+        await self.env.step(CallToolAction(tool_name="done", arguments={"keep_session": False}))
 
     async def close(self) -> None:
         """Close the underlying async env client. Called once at worker shutdown so
