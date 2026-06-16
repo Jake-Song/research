@@ -131,6 +131,26 @@ def format_tools(tools) -> str:
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
 MESSAGE_TIMEOUT_S = 1200.0
+# connect + reset is the heavy phase: the env server spawns a per-session subprocess
+# on each reset. Under real concurrency a burst of simultaneous connect+reset calls
+# starves the server's accept loop, so other handshakes time out (10s default) and
+# the rollout worker dies. Following OpenEnv's AWM stress test
+# (examples/agent_world_model/example_stress_test.py): bump the connect timeout AND
+# rate-limit concurrent connect+reset with a semaphore, leaving the per-turn tool
+# calls unbounded. The server supports the concurrency itself
+# (AWMEnvironment.SUPPORTS_CONCURRENT_SESSIONS=True, MAX_CONCURRENT_ENVS unbounded).
+CONNECT_TIMEOUT_S = 300.0
+RESET_CONCURRENCY = 256
+_reset_semaphore: "asyncio.Semaphore | None" = None
+
+
+def _get_reset_semaphore() -> "asyncio.Semaphore":
+    # Created lazily so it binds to the rollout worker's event loop, and shared
+    # across every per-slot AWMEnvironment instance (one worker, one loop).
+    global _reset_semaphore
+    if _reset_semaphore is None:
+        _reset_semaphore = asyncio.Semaphore(RESET_CONCURRENCY)
+    return _reset_semaphore
 # reward_type strings the AWM env assigns to tool-call format violations
 # (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
 # The paper terminates the rollout with r_t = -1.0 on any such violation.
@@ -147,7 +167,11 @@ class AWMEnvironment:
     def __init__(self, env_url: str):
         # Default message_timeout_s is 60s; the sql verifier's LLM judge can take
         # longer, so bump it to avoid spurious TimeoutErrors during scoring.
-        self.env = AWMEnv(base_url=env_url, message_timeout_s=MESSAGE_TIMEOUT_S)
+        self.env = AWMEnv(
+            base_url=env_url,
+            connect_timeout_s=CONNECT_TIMEOUT_S,
+            message_timeout_s=MESSAGE_TIMEOUT_S,
+        )
         # Set by call_tool when a tool call hits a format violation; the rollout
         # worker checks it to early-terminate the rollout with reward -1.0.
         self.format_violation = False
@@ -161,14 +185,17 @@ class AWMEnvironment:
         self.format_violation = False
         self.scenario = scenario
         self.task_idx = task_idx
-        await self.env.reset(
-            scenario=scenario,
-            task_idx=task_idx,
-            verifier_mode="sql",
-            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
-            llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
-            llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
-        )
+        # Rate-limit the heavy connect+reset (subprocess spawn); see RESET_CONCURRENCY.
+        async with _get_reset_semaphore():
+            await self.env.connect()
+            await self.env.reset(
+                scenario=scenario,
+                task_idx=task_idx,
+                verifier_mode="sql",
+                llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
+                llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
+                llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
+            )
 
     async def list_tools(self) -> str:
         """Discover every MCP tool available for this task. Call this FIRST.
