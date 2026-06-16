@@ -591,7 +591,7 @@ def parse_args() -> argparse.Namespace:
         " this to the sum of previous runs' dataset sizes.",
     )
     parser.add_argument("--num-generations", type=int, default=8)
-    parser.add_argument("--max-turns", type=int, default=8)
+    parser.add_argument("--max-turns", type=int, default=20)
     parser.add_argument(
         "--context-window-turns",
         type=int,
@@ -599,8 +599,8 @@ def parse_args() -> argparse.Namespace:
         help="Each per-turn training sample keeps system + initial user + the prefix"
         " through the list_tools exchange + this many most recent turns.",
     )
-    parser.add_argument("--max-completion-length", type=int, default=4096)
-    parser.add_argument("--thinking-token-budget", type=int, default=3072)
+    parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
@@ -671,7 +671,7 @@ def main() -> None:
         # to scale the training-loss logits, keeping the two consistent.
         # top_p/top_k/min_p/presence_penalty aren't exposed here — they're set on
         # the vLLM server in scripts/run_vllm_awm.sh.
-        temperature=0.6,
+        temperature=1,
         num_generations=args.num_generations,
         max_completion_length=args.max_completion_length,
         thinking_token_budget=args.thinking_token_budget,
