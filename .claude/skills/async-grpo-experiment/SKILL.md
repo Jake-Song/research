@@ -1,6 +1,6 @@
 ---
 name: async-grpo-experiment
-description: Use this skill to auto-run an async-GRPO training experiment on the provisioned GPU cloud node — e.g. "run an AWM async GRPO experiment", "launch a training run on the 8-GPU rig", "train Qwen3-4B on AWM and report". It makes a fresh git branch for the run, brings up the 3-process stack (AWM env server + vLLM + FSDP2 trainers), smoke-tests it, runs a two-phase training run (12 steps, then on to 24 steps total), monitors reward/logs, and writes a results note. Runs ON the GPU node, not the laptop.
+description: Use this skill to auto-run or plan an async-GRPO training experiment on the provisioned GPU cloud node — e.g. "run an AWM async GRPO experiment", "launch a training run on the 8-GPU rig", "train Qwen3-4B on AWM and report", "draft a checkpoint sweep plan". It makes a fresh git branch for the run, brings up the 3-process stack (AWM env server + vLLM + FSDP2 trainers), smoke-tests it, runs a two-phase training run (12 steps, then on to 24 steps total), monitors reward/logs, records checkpoint artifacts, and writes a results note. Runs ON the GPU node, not the laptop.
 ---
 
 You autonomously run one async-GRPO training experiment **on the provisioned GPU cloud node** and report on it. The stack is three cooperating processes with NCCL weight transfer:
@@ -41,6 +41,18 @@ From a clean tree on `main`, create and check out a fresh branch for this run �
 - **Step count is two-phase: 12 then 24.** Run a single trainer invocation to `max_steps=24` with a checkpoint at step 12 (see `--save-steps` below), and treat step 12 as the phase-1 monitoring/report milestone and step 24 as phase-2. The trainer has no `--max-steps` flag yet — add one: an argparse line (`--max-steps`, type int, default 24) and pass `max_steps=args.max_steps` into the `AsyncGRPOConfig(...)`. This is a small, necessary wiring change and it lives on the experiment branch. Do not instead try to back into the step counts via `dataset_size`/epochs — `max_steps` is exact.
 - Other knobs are CLI flags (`--dataset-size`, `--num-generations`, `--learning-rate`, `--gradient-accumulation-steps`, `--max-completion-length`, `--save-steps`, `--wandb-name`, `--output-dir`, `--no-push-to-hub`, …). Use the user's specified knobs; otherwise the defaults from `experiment/awm_transfer_experiment_plan.md` (Qwen3-4B, `num_generations=8`, `max_completion_length=1024`, `grad_accum=16`, `lr=1e-6`, `dataset_size=1000`). Set `--save-steps 12` so checkpoints land at step 12 (end of phase 1) and step 24 (end of phase 2). State the final config back to the user.
 - Use a unique `--wandb-name` / `--output-dir` (match the branch name) so you don't clobber a prior run.
+
+### Checkpoint sweep mode
+
+When the user asks for a checkpoint sweep plan rather than an immediate run, draft the sweep around the existing trainer and these checkpoints:
+
+- **Primary pilot:** `C0` base model, `C12` checkpoint at step 12, `C24` checkpoint at step 24.
+- **Full-study extension only after the pilot looks useful:** `C0`, `C24`, `C48`, `C72`, `C96` across three seeds.
+- **Exact boundaries:** require the `--max-steps` pass-through above; use `--save-steps 12 --max-steps 24` for the pilot, or `--save-steps 24 --max-steps 96` for the extension.
+- **Artifacts:** record `<output_dir>/checkpoint-12`, `<output_dir>/checkpoint-24`, `<output_dir>/rollouts.jsonl`, and `<output_dir>/calibration.jsonl`; for longer sweeps record every emitted checkpoint path.
+- **Evaluation handoff:** do not build a new eval harness unless explicitly asked. Point the user to the existing BFCL quick-check plan first: evaluate base, step-12, and step-24 with identical prompts, parser, decoding params, turn budget, and served-model alias.
+- **Metrics to compare:** AWM mean reward, verifier failure rate, BFCL `multi_turn_base` accuracy, BFCL irrelevance/hallucination accuracy, tool-call format-error rate, and tool-call frequency.
+- **Pilot decision rule:** continue to 96 steps and three seeds only if step 12 or 24 improves multi-turn accuracy without a large irrelevance regression, and verifier failures stay below 10%. Otherwise revise the training/eval path before spending more GPU time.
 
 ### Part 3: Bring up the stack (tmux, ordered)
 
