@@ -60,7 +60,7 @@ from datetime import date
 from datasets import Dataset
 from trl.chat_template_utils import parse_response
 from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
-from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker
+from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample
 
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
 from agent_world_model_env import AWMEnv
@@ -287,6 +287,10 @@ class AWMEnvironment:
 TRAJECTORY_FILE = None
 CALIBRATION_FILE = None
 
+# Sliding-context window: each per-turn training sample sees system + initial user
+# + the prefix through the list_tools exchange + this many most recent turns (set in main()).
+CONTEXT_WINDOW_TURNS = 3
+
 _REWARD_EMA_ALPHA = 0.1  # ~20-group (10-step) smoothing window
 _MODEL_OUTCOME_STATUSES = {"complete", "incomplete", "agent_error", "format_violation"}
 
@@ -304,6 +308,10 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         super().__init__(*args, **kwargs)
         self._rollout_rewards: dict[int, float] = {}
         self._rollout_statuses: dict[int, str] = {}
+        # Per-turn (windowed_prompt_ids, turn_ids, turn_mask, turn_logprobs) lists,
+        # keyed by id(completion); consumed by _score_group to split each rollout
+        # into one training sample per assistant turn.
+        self._rollout_turns: dict[int, list] = {}
         self.reward_funcs = [self._verifier_reward]
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
@@ -322,7 +330,53 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         )
         for s in samples:
             s.metrics["reward_ema"] = self._reward_ema
-        return samples
+
+        # Sample splitting: replace each whole-rollout sample with one sample per
+        # assistant turn, each carrying its windowed context (loss masked to the
+        # turn) and sharing the rollout's episode-level advantage. super() returns
+        # one sample per completion in group.completions order, so the zip aligns.
+        expanded = []
+        for completion, s in zip(group.completions, samples):
+            turns = self._rollout_turns.pop(id(completion), None)
+            if not turns:
+                expanded.append(s)  # defensive; a rollout should always have turns
+                continue
+            for win_ids, turn_ids, turn_mask, turn_lp in turns:
+                expanded.append(
+                    RolloutSample(
+                        prompt=s.prompt,
+                        completion=s.completion,
+                        input_ids=win_ids + turn_ids,
+                        completion_mask=[0] * len(win_ids) + turn_mask,
+                        old_log_probs=[0.0] * len(win_ids) + turn_lp,
+                        advantage=s.advantage,
+                        model_version=s.model_version,
+                        metrics=dict(s.metrics),
+                    )
+                )
+        return expanded
+
+    def _windowed_messages(self, prompt, completion):
+        # Context for the next assistant turn: the prompt (system + initial user),
+        # the pinned prefix through the list_tools exchange (its tool result carries
+        # the discovered tool list), and the CONTEXT_WINDOW_TURNS most recent turns.
+        # `completion` holds only complete (assistant, tool) pairs here, so indices
+        # are even and completion[i+1] is completion[i]'s tool result.
+        w = CONTEXT_WINDOW_TURNS
+        # Pin up to and including the assistant turn that calls list_tools; fall back
+        # to the first exchange if it hasn't been called yet.
+        pin_end = min(2, len(completion))
+        for i in range(0, len(completion), 2):
+            calls = completion[i].get("tool_calls") or []
+            if any(c["function"]["name"] == "list_tools" for c in calls):
+                pin_end = i + 2
+                break
+        recent_start = max(0, len(completion) - 2 * w)
+        if recent_start <= pin_end:
+            ctx = completion  # pinned prefix meets the recent window — no gap
+        else:
+            ctx = completion[:pin_end] + completion[recent_start:]
+        return list(prompt) + list(ctx)
 
     async def _generate_one(self, prompt, tool_dict):
         # Reimplements AsyncRolloutWorker._generate_one's multi-turn loop so we can
@@ -336,21 +390,30 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
-        prompt_ids = self.tokenizer.apply_chat_template(
-            prompt,
-            return_dict=False,
-            add_generation_prompt=True,
-            tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
-            chat_template=self.chat_template,
-            **self.chat_template_kwargs,
-        )
+        self._rollout_turns[id(completion)] = []
         while True:
+            # Rebuild the windowed context each turn (no monotonic accumulation): the
+            # agent generates under the same truncated context the training sample
+            # will use, so the vLLM old_log_probs match the trainer's input exactly.
+            prompt_ids = self.tokenizer.apply_chat_template(
+                self._windowed_messages(prompt, completion),
+                return_dict=False,
+                add_generation_prompt=True,
+                tools=self.tools or None,  # `or None`: Llama bug: it renders tool boilerplate for tools=[]
+                chat_template=self.chat_template,
+                **self.chat_template_kwargs,
+            )
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
             assistant_message = parse_response(self.tokenizer, turn_ids)
             completion.append(assistant_message)
+            turn_mask = self._turn_mask(turn_ids)
+            # Capture this turn as its own training sample (windowed context + turn).
+            self._rollout_turns[id(completion)].append(
+                (prompt_ids, turn_ids, turn_mask, turn_logprobs)
+            )
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
-            tool_mask.extend(self._turn_mask(turn_ids))
+            tool_mask.extend(turn_mask)
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
@@ -386,7 +449,6 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 env.close_session()
                 self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
-            prompt_ids = prompt_ids + turn_ids + suffix_ids
             iteration_num += 1
 
     def _save_trajectory(self, env, prompt, completion, reward, status):
@@ -530,6 +592,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--num-generations", type=int, default=8)
     parser.add_argument("--max-turns", type=int, default=8)
+    parser.add_argument(
+        "--context-window-turns",
+        type=int,
+        default=3,
+        help="Each per-turn training sample keeps system + initial user + the prefix"
+        " through the list_tools exchange + this many most recent turns.",
+    )
     parser.add_argument("--max-completion-length", type=int, default=4096)
     parser.add_argument("--thinking-token-budget", type=int, default=3072)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
@@ -562,10 +631,11 @@ def main() -> None:
     wandb.login()
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
-    global TRAJECTORY_FILE, CALIBRATION_FILE
+    global TRAJECTORY_FILE, CALIBRATION_FILE, CONTEXT_WINDOW_TURNS
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
     CALIBRATION_FILE = os.path.join(args.output_dir, "calibration.jsonl")
+    CONTEXT_WINDOW_TURNS = args.context_window_turns
 
     dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
 
