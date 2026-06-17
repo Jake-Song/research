@@ -132,6 +132,10 @@ def format_tools(tools) -> str:
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
 MESSAGE_TIMEOUT_S = 1200.0
+
+# Limits simultaneous env.connect()+reset() calls to prevent bursting the server's
+# subprocess-spawn accept loop. Set via --reset-concurrency (default 32).
+_RESET_SEMAPHORE: asyncio.Semaphore | None = None
 # connect + reset is the heavy phase: the env server spawns a per-session subprocess
 # on each reset. Under real concurrency a burst of simultaneous connect+reset calls
 # starves the server's accept loop, so other handshakes time out (10s default) and
@@ -192,8 +196,11 @@ class AWMEnvironment:
         self.format_violation = False
         self.scenario = scenario
         self.task_idx = task_idx
-        await self.env.connect()
-        await self.env.reset(
+        # Semaphore covers only connect+reset (the subprocess-spawn phase) so
+        # concurrent rollouts proceed freely once their env is initialized.
+        async with _RESET_SEMAPHORE:
+            await self.env.connect()
+            await self.env.reset(
             scenario=scenario,
             task_idx=task_idx,
             verifier_mode="sql",
@@ -666,10 +673,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-completion-length", type=int, default=4096)
     parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--per-device-batch-size", type=int, default=6)
+    parser.add_argument("--per-device-batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch_fused")
     parser.add_argument("--max-steps", type=int, default=90)
+    parser.add_argument("--reset-concurrency", type=int, default=32,
+                        help="Max simultaneous env connect+reset calls.")
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--save-steps", type=int, default=30)
     parser.add_argument("--save-total-limit", type=int, default=None)
@@ -696,7 +705,8 @@ def main() -> None:
         wandb.login(key=os.environ.get("WANDB_API_KEY"))
         wandb.init(project=args.wandb_project, name=args.wandb_name)
 
-    global TRAJECTORY_FILE, CALIBRATION_FILE, CONTEXT_WINDOW_TURNS
+    global TRAJECTORY_FILE, CALIBRATION_FILE, CONTEXT_WINDOW_TURNS, _RESET_SEMAPHORE
+    _RESET_SEMAPHORE = asyncio.Semaphore(args.reset_concurrency)
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
     CALIBRATION_FILE = os.path.join(args.output_dir, "calibration.jsonl")
@@ -754,6 +764,7 @@ def main() -> None:
         # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
+        queue_maxsize=2304,
         heartbeat_stale_after_s=1200.0,
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
