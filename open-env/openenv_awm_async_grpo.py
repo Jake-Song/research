@@ -676,7 +676,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-device-batch-size", type=int, default=4)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch_fused")
-    parser.add_argument("--max-steps", type=int, default=90)
+    parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--reset-concurrency", type=int, default=32,
                         help="Max simultaneous env connect+reset calls.")
     parser.add_argument("--num-epochs", type=int, default=1)
