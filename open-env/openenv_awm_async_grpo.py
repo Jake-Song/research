@@ -28,7 +28,7 @@ config at open-env/configs/fsdp2.yaml.
     # Terminal 2 - vLLM server on GPU 0,1
     bash open-env/scripts/run_vllm_awm.sh
 
-    # Terminal 3 - 7 FSDP2 trainers on GPUs 1-7 (sql verifier needs an LLM judge)
+    # Terminal 3 - 6 FSDP2 trainers on GPUs 2-7 (sql verifier needs an LLM judge)
     export OPENENV_AWM_LLM_BASE_URL=... OPENENV_AWM_LLM_API_KEY=... OPENENV_AWM_LLM_MODEL=...
     bash open-env/scripts/run_trainer_awm.sh --env-url http://localhost:8899
 
@@ -666,7 +666,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-completion-length", type=int, default=4096)
     parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--per-device-batch-size", type=int, default=1)
+    parser.add_argument("--per-device-batch-size", type=int, default=6)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch_fused")
     parser.add_argument("--max-steps", type=int, default=90)
@@ -685,16 +685,16 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    import huggingface_hub
     import wandb
 
     from transformers import AutoTokenizer
     from trl.chat_template_utils import qwen3_chat_template
 
     args = parse_args()
-    huggingface_hub.login(token=os.environ.get("HF_TOKEN"))
-    wandb.login(key=os.environ.get("WANDB_API_KEY"))
-    wandb.init(project=args.wandb_project, name=args.wandb_name)
+    is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
+    if is_main_process:
+        wandb.login(key=os.environ.get("WANDB_API_KEY"))
+        wandb.init(project=args.wandb_project, name=args.wandb_name)
 
     global TRAJECTORY_FILE, CALIBRATION_FILE, CONTEXT_WINDOW_TURNS
     os.makedirs(args.output_dir, exist_ok=True)
