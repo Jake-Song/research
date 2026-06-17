@@ -710,6 +710,9 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
     CALIBRATION_FILE = os.path.join(args.output_dir, "calibration.jsonl")
+    for f in (TRAJECTORY_FILE, CALIBRATION_FILE):
+        if os.path.exists(f):
+            os.remove(f)
     CONTEXT_WINDOW_TURNS = args.context_window_turns
 
     dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
