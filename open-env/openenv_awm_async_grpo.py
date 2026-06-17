@@ -15,8 +15,8 @@ on the slot's env immediately after each rollout completes (while the env DB
 state is still valid). The reward is stored by completion identity and retrieved
 by `_verifier_reward`. The model never sees the reward — it is not a tool.
 
-Eight-GPU cloud setup: 1 vLLM inference GPU + 7 FSDP2 trainer GPUs, with NCCL
-weight transfer. The rollout worker only runs on rank 0, so the 7 trainer ranks
+Eight-GPU cloud setup: vLLM tensor-parallel on GPUs 0,1 + 6 FSDP2 trainer GPUs (2–7), with
+NCCL weight transfer. The rollout worker only runs on rank 0, so the 6 trainer ranks
 share the single vLLM server. See open-env/scripts/run_vllm_awm.sh and
 open-env/scripts/run_trainer_awm.sh; the trainer launch uses the FSDP2 accelerate
 config at open-env/configs/fsdp2.yaml.
