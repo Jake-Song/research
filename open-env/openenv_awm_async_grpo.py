@@ -23,7 +23,7 @@ config at open-env/configs/fsdp2.yaml.
 
     # Terminal 1 - AWM env server on CPU (or set --env-url to a hosted HF Space)
     PYTHONPATH=src:envs uv run uvicorn \
-      envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 180 --ws-ping-timeout 180
+      envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 1800 --ws-ping-timeout 1800
 
     # Terminal 2 - vLLM server on GPU 0
     bash open-env/scripts/run_vllm_awm.sh
@@ -149,7 +149,7 @@ CONNECT_TIMEOUT_S = 300.0
 # `1011 keepalive ping timeout`. connect() takes no ping kwargs, so bump the
 # keepalive grace well past MESSAGE_TIMEOUT_S by patching the module-level
 # ws_connect — it then only fires on a genuinely dead peer.
-WS_PING_TIMEOUT_S = 180.0
+WS_PING_TIMEOUT_S = 1800.0
 _orig_ws_connect = _env_client.ws_connect
 def _ws_connect_long_keepalive(*args, **kwargs):
     kwargs.setdefault("ping_interval", WS_PING_TIMEOUT_S)
@@ -654,7 +654,7 @@ def parse_args() -> argparse.Namespace:
         help="Start index into the shuffled dataset; for continual training set"
         " this to the sum of previous runs' dataset sizes.",
     )
-    parser.add_argument("--num-generations", type=int, default=8)
+    parser.add_argument("--num-generations", type=int, default=16)
     parser.add_argument("--max-turns", type=int, default=20)
     parser.add_argument(
         "--context-window-turns",
@@ -663,12 +663,13 @@ def parse_args() -> argparse.Namespace:
         help="Each per-turn training sample keeps system + initial user + the prefix"
         " through the list_tools exchange + this many most recent turns.",
     )
-    parser.add_argument("--max-completion-length", type=int, default=2048)
+    parser.add_argument("--max-completion-length", type=int, default=4096)
     parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
-    parser.add_argument("--optim", default="paged_adamw_8bit")
+    parser.add_argument("--optim", default="adamw_torch_fused")
+    parser.add_argument("--max-steps", type=int, default=90)
     parser.add_argument("--num-epochs", type=int, default=1)
     parser.add_argument("--save-steps", type=int, default=30)
     parser.add_argument("--save-total-limit", type=int, default=None)
@@ -691,8 +692,8 @@ def main() -> None:
     from trl.chat_template_utils import qwen3_chat_template
 
     args = parse_args()
-    huggingface_hub.login()
-    wandb.login()
+    huggingface_hub.login(token=os.environ.get("HF_TOKEN"))
+    wandb.login(key=os.environ.get("WANDB_API_KEY"))
     wandb.init(project=args.wandb_project, name=args.wandb_name)
 
     global TRAJECTORY_FILE, CALIBRATION_FILE, CONTEXT_WINDOW_TURNS
@@ -720,6 +721,7 @@ def main() -> None:
         model_init_kwargs={"attn_implementation": "flash_attention_3"},
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
+        max_steps=args.max_steps,
         learning_rate=args.learning_rate,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=args.per_device_batch_size,
