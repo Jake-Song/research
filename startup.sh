@@ -20,5 +20,7 @@ cd trl
 git checkout AsyncGRPO
 cd ..
 git clone https://github.com/Jake-Song/OpenEnv.git
-
+cd OpenEnv
+git checkout fix/verfier
+cd ..
 curl -fsSL https://claude.ai/install.sh | bash
