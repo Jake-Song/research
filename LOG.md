@@ -344,3 +344,71 @@ Per-group solve-rate (frac of generations scoring 1.0) over the 43 full groups:
 1. **Difficulty-filter the zero-variance groups (28% of full groups)** — drop the always-fail and always-pass prompts so compute lands on groups with reward spread. This is the single highest-value change for GRPO efficiency.
 2. The run-start (verifier off) and tail (force-end) bands are **expected/benign** — don't read them as regressions or outages.
 3. `server_error` (22, likely DB init) is a real-but-minor follow-up; `agent_error` (12) and the `call_tool` bypass bug are non-issues this run.
+
+---
+
+## 2026-06-17 — rollouts.jsonl (1135 rollouts, async-GRPO run)
+
+### Overview
+
+**1135 rollouts**, mean reward **0.501**. Reward histogram: 510 complete (1.0), 583 incomplete/scoring-failure (0.1), 42 agent_error (0.0).
+
+Statuses: `complete` 510, `incomplete` 467, `agent_error` 42, `judge_error` 59, `server_error` 41, `no_verifier` 16.
+
+Reward by decile (noisy, no clean monotonic trend):
+`[0.51, 0.45, 0.51, 0.53, 0.58, 0.61, 0.34, 0.42, 0.45, 0.62, 0.46]`
+
+Per-step reward is highly volatile (e.g. step 0→1 drops 0.10→0.09, step 2→4 rises 0.44→0.89, then step 8 crashes to 0.33). This is expected from the heterogeneous scenario mix — different tasks sampled each step — not a learning pathology.
+
+---
+
+### Difficulty Calibration (Critical)
+
+137 full-size groups (8 or 16 rollouts), 7 truncated partials from run shutdown.
+
+| Bucket | Groups | % |
+|---|---|---|
+| never (0%) | 47 | 34% |
+| (0, 25%) | 10 | 7% |
+| [25, 50%) | 17 | 12% |
+| [50, 75%) | 14 | 10% |
+| [75, 100%) | 16 | 12% |
+| always (100%) | 33 | 24% |
+
+**Zero-variance groups: 64/137 (47%)** — these have identical rewards across all rollouts and contribute zero GRPO advantage, producing no gradient. This is the single biggest drag on training efficiency.
+
+- Mean solve-rate: **0.45** (ideal ~0.5 for GRPO)
+- Useful (spread) groups: **57/137 (42%)**
+- Never-solved: **47 groups**, Always-solved: **33 groups** — ratio 1.42×, meaning dead-hard tasks are the bigger waste relative to always-pass trivials.
+
+**Worst scenarios** (mean reward ≤ 0.1): `accounting_2` (0.062), `b2b_workflow_line_of_business_app_1`, `crm_6`, `iot_smart_infrastructure_management_1`, `membership_management_3`, `job_board_1`, `social_media_5`, `workflow_automation_4` — all 8/8 incomplete.
+
+**Best scenarios** (mean = 1.0, always-pass): `booking_scheduling_8`, `content_bookmark_management_1`, `education_learning_management_2`, `marketplace_9`, and 13 others.
+
+---
+
+### Failure Triage
+
+Of 625 non-complete rollouts:
+
+| Category | Count | % |
+|---|---|---|
+| proper_wrapper (correct mechanics, wrong answer) | 482 | 77% |
+| direct_mcp_names (bypasses call_tool) | 133 | 21% |
+| no_tool_calls | 7 | 1% |
+| truncated (max_tokens cutoff) | 3 | 0% |
+
+**direct_mcp_names (21%) — driven by think-block truncation**: Model calls env tools by name (e.g. `list_accounts`, `list_zelle_recipients`) instead of through `call_tool`. This rate is elevated vs. prior runs and the root cause is **`max_completion_tokens` being hit mid-think block**: 654/709 assistant messages with text content have an open `<think>` without a closing `</think>` — the model is cut off while reasoning about which tool to call, then force-completion jumps directly to the tool name it had been constructing. 129/144 direct-name calls happen after exactly turn 1 (post-`list_tools`), the exact moment where the model starts a large think block over the tool list. Only 55 rollouts have intact closed think blocks. Fix: **increase `max_completion_tokens`** or **restore `--thinking-token-budget`** to cap individual think block size and prevent runaway thinking from consuming the full token budget before the action can be emitted.
+
+**Scoring failures (10.2% noise)**: 116 rollouts have reward forced to 0.1 — `judge_error` 59, `server_error` 41, `no_verifier` 16. **Almost all are force-terminate artifacts**: the env server is killed mid-rollout (timeout/teardown), causing the verifier or judge to never complete — not actual server instability or judge reliability issues. These are spread throughout the run (not tail-clustered), consistent with per-rollout force-termination rather than end-of-run shutdown. Not a reliability signal to chase.
+
+**Truncation (per prior triage metric) looks low** (3 rollouts flagged by empty-last-message heuristic) but the cut-think-block evidence above shows truncation is the dominant issue — the empty-message heuristic underdetects it when the model is cut mid-`<think>`.
+
+---
+
+### Takeaways
+
+1. **47% zero-variance groups is the top priority.** Nearly half the compute lands on groups with no GRPO gradient. The 47 never-solved groups (34%) are the bigger contributor vs. 33 always-solved (24%). Filtering dead-hard and trivial tasks should be weighted toward the never-solved end.
+2. **Increase `max_completion_tokens` or restore `--thinking-token-budget`** — the 21% `direct_mcp_names` rate is elevated because completions are hitting the token ceiling mid-think, causing the model to emit bare tool names. This is an infra/config fix, not a prompt fix.
+3. **Scoring failures (10.2%) are force-terminate artifacts** — not judge/server reliability issues. No action needed beyond noting they add noise.
+4. Mean solve-rate 0.45 is slightly below ideal 0.5, pulled down by the excess of never-solved tasks. Pruning/replacing those should push the calibration into the ideal band.
