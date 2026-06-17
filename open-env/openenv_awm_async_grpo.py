@@ -23,7 +23,7 @@ config at open-env/configs/fsdp2.yaml.
 
     # Terminal 1 - AWM env server on CPU (or set --env-url to a hosted HF Space)
     PYTHONPATH=src:envs uv run uvicorn \
-      envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899
+      envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 180 --ws-ping-timeout 180
 
     # Terminal 2 - vLLM server on GPU 0
     bash open-env/scripts/run_vllm_awm.sh
@@ -63,6 +63,7 @@ from trl.experimental.async_grpo import AsyncGRPOTrainer, AsyncGRPOConfig
 from trl.experimental.async_grpo.async_rollout_worker import AsyncRolloutWorker, RolloutSample
 
 from openenv.core.env_server.mcp_types import CallToolAction, ListToolsAction
+import openenv.core.env_client as _env_client
 from agent_world_model_env import AWMEnv
 from dotenv import load_dotenv
 load_dotenv()
@@ -135,22 +136,28 @@ MESSAGE_TIMEOUT_S = 1200.0
 # on each reset. Under real concurrency a burst of simultaneous connect+reset calls
 # starves the server's accept loop, so other handshakes time out (10s default) and
 # the rollout worker dies. Following OpenEnv's AWM stress test
-# (examples/agent_world_model/example_stress_test.py): bump the connect timeout AND
-# rate-limit concurrent connect+reset with a semaphore, leaving the per-turn tool
-# calls unbounded. The server supports the concurrency itself
+# (examples/agent_world_model/example_stress_test.py), bump the connect timeout so
+# those handshakes ride out the burst. The server supports the concurrency itself
 # (AWMEnvironment.SUPPORTS_CONCURRENT_SESSIONS=True, MAX_CONCURRENT_ENVS unbounded).
 CONNECT_TIMEOUT_S = 300.0
-RESET_CONCURRENCY = 256
-_reset_semaphore: "asyncio.Semaphore | None" = None
+
+# The OpenEnv websocket client (EnvClient.connect) opens connections with the
+# `websockets` library default keepalive: a ping every 20s, dropping the
+# connection if no pong arrives within 20s. A heavy reset() (per-session
+# subprocess spawn) or a slow SQL LLM-judge call legitimately blocks the event
+# loop far longer than 20s, so the peer kills the connection mid-rollout with
+# `1011 keepalive ping timeout`. connect() takes no ping kwargs, so bump the
+# keepalive grace well past MESSAGE_TIMEOUT_S by patching the module-level
+# ws_connect — it then only fires on a genuinely dead peer.
+WS_PING_TIMEOUT_S = 180.0
+_orig_ws_connect = _env_client.ws_connect
+def _ws_connect_long_keepalive(*args, **kwargs):
+    kwargs.setdefault("ping_interval", WS_PING_TIMEOUT_S)
+    kwargs.setdefault("ping_timeout", WS_PING_TIMEOUT_S)
+    return _orig_ws_connect(*args, **kwargs)
+_env_client.ws_connect = _ws_connect_long_keepalive
 
 
-def _get_reset_semaphore() -> "asyncio.Semaphore":
-    # Created lazily so it binds to the rollout worker's event loop, and shared
-    # across every per-slot AWMEnvironment instance (one worker, one loop).
-    global _reset_semaphore
-    if _reset_semaphore is None:
-        _reset_semaphore = asyncio.Semaphore(RESET_CONCURRENCY)
-    return _reset_semaphore
 # reward_type strings the AWM env assigns to tool-call format violations
 # (mirrors FORMAT_ERROR_TYPES in agent_world_model_env/server/awm_environment.py).
 # The paper terminates the rollout with r_t = -1.0 on any such violation.
@@ -185,17 +192,15 @@ class AWMEnvironment:
         self.format_violation = False
         self.scenario = scenario
         self.task_idx = task_idx
-        # Rate-limit the heavy connect+reset (subprocess spawn); see RESET_CONCURRENCY.
-        async with _get_reset_semaphore():
-            await self.env.connect()
-            await self.env.reset(
-                scenario=scenario,
-                task_idx=task_idx,
-                verifier_mode="sql",
-                llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
-                llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
-                llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
-            )
+        await self.env.connect()
+        await self.env.reset(
+            scenario=scenario,
+            task_idx=task_idx,
+            verifier_mode="sql",
+            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
+            llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
+            llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
+        )
 
     async def list_tools(self) -> str:
         """Discover every MCP tool available for this task. Call this FIRST.

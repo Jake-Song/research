@@ -59,8 +59,12 @@ When the user asks for a checkpoint sweep plan rather than an immediate run, dra
 Use a tmux session (`tmux new-session -d -s grpo`) with one window per process so they survive turn boundaries and you can tail each independently. Each step must be healthy before the next:
 
 1. **Env server** (from `OpenEnv/`):
-   `PYTHONPATH=src:envs uv run uvicorn envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899`
+   `PYTHONPATH=src:envs uv run uvicorn envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 1800 --ws-ping-timeout 1800`
    Health gate: `curl -fs localhost:8899` returns without connection-refused.
+   The `--ws-ping-*` flags bump uvicorn's default 20s websocket keepalive past the
+   trainer's message timeout, so a heavy reset() or slow LLM-judge call doesn't get
+   killed mid-rollout with `1011 keepalive ping timeout`. Must match the client-side
+   `WS_PING_TIMEOUT_S` in `openenv_awm_async_grpo.py`.
 2. **vLLM** (GPU 0): `bash open-env/scripts/run_vllm_awm.sh`.
    Health gate: poll `curl -fs http://localhost:8000/health` until 200 (weight load takes minutes). Do **not** start the trainer before vLLM is serving.
 3. **Trainers** (GPUs 1–N), from repo root:
