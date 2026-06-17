@@ -22,6 +22,7 @@ open-env/scripts/run_trainer_awm.sh; the trainer launch uses the FSDP2 accelerat
 config at open-env/configs/fsdp2.yaml.
 
     # Terminal 1 - AWM env server on CPU (or set --env-url to a hosted HF Space)
+    ulimit -n 65536
     PYTHONPATH=src:envs uv run uvicorn \
       envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 1800 --ws-ping-timeout 1800
 
