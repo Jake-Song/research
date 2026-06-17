@@ -25,7 +25,7 @@ config at open-env/configs/fsdp2.yaml.
     PYTHONPATH=src:envs uv run uvicorn \
       envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 1800 --ws-ping-timeout 1800
 
-    # Terminal 2 - vLLM server on GPU 0
+    # Terminal 2 - vLLM server on GPU 0,1
     bash open-env/scripts/run_vllm_awm.sh
 
     # Terminal 3 - 7 FSDP2 trainers on GPUs 1-7 (sql verifier needs an LLM judge)
