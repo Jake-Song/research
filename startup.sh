@@ -21,6 +21,6 @@ git checkout AsyncGRPO
 cd ..
 git clone https://github.com/Jake-Song/OpenEnv.git
 cd OpenEnv
-git checkout fix/verfier
+git checkout llm-judge-batch
 cd ..
 curl -fsSL https://claude.ai/install.sh | bash
