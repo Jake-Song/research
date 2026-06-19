@@ -7,7 +7,7 @@ if [ -f .env ]; then
   set -a && source .env && set +a
 fi
 
-uv run huggingface-cli login --token "${HF_TOKEN}"
+uv run hf auth login --token "${HF_TOKEN}"
 
 # /v1/completions doesn't accept thinking_token_budget upstream; patch it in.
 uv run python "$(dirname "$0")/patch_vllm_thinking_budget.py"

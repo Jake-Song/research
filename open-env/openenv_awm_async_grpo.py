@@ -674,10 +674,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-completion-length", type=int, default=4096)
     parser.add_argument("--thinking-token-budget", type=int, default=None)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--per-device-batch-size", type=int, default=4)
+    parser.add_argument("--per-device-batch-size", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=7e-7)
     parser.add_argument("--optim", default="adamw_torch_fused")
-    parser.add_argument("--max-steps", type=int, default=None)
+    # parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--reset-concurrency", type=int, default=32,
                         help="Max simultaneous env connect+reset calls.")
     parser.add_argument("--num-epochs", type=int, default=1)
@@ -735,7 +735,7 @@ def main() -> None:
         model_init_kwargs={"attn_implementation": "flash_attention_3"},
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
-        max_steps=args.max_steps,
+        # max_steps=args.max_steps,
         learning_rate=args.learning_rate,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=args.per_device_batch_size,
@@ -768,8 +768,8 @@ def main() -> None:
         # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
-        max_inflight_tasks=256,
-        queue_maxsize=2304,
+        # max_inflight_tasks=256,
+        # queue_maxsize=2304,
         heartbeat_stale_after_s=1200.0,
         # vLLM (async => server mode on a separate GPU)
         vllm_server_base_url=f"http://{args.vllm_server_host}:{args.vllm_server_port}",
