@@ -768,7 +768,7 @@ def main() -> None:
         # chat_template_kwargs={"enable_thinking": False},
         weight_sync_steps=1,
         max_staleness=4,
-        # max_inflight_tasks=256,
+        max_inflight_tasks=128,
         # queue_maxsize=2304,
         heartbeat_stale_after_s=1200.0,
         # vLLM (async => server mode on a separate GPU)
