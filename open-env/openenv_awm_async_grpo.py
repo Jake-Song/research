@@ -664,6 +664,14 @@ def build_dataset(
             end += 1
             if len(seen) >= num_scenarios:
                 break
+        if len(seen) < num_scenarios:
+            # Coverage target unreachable from this start: the loop consumed the
+            # rest of the dataset. Warn instead of silently training on everything.
+            logger.warning(
+                "Requested num_scenarios=%d but only %d unique scenarios are "
+                "available from dataset_start=%d; using the full remaining %d groups.",
+                num_scenarios, len(seen), dataset_start, end - dataset_start,
+            )
     else:
         end = min(dataset_start + dataset_size, len(dataset))
     return dataset.select(range(dataset_start, end))
@@ -812,6 +820,15 @@ def main() -> None:
         args.env_url, args.dataset_size, args.dataset_start, args.num_scenarios
     )
 
+    # When --num-scenarios is set it fully determines the run: build_dataset
+    # already ignores --dataset-size, and here --max-steps is ignored too by
+    # resetting it so AsyncGRPOTrainer re-derives the step target from
+    # len(dataset). The trainer computes that with accelerator.num_processes,
+    # the authoritative world size under FSDP2/multi-GPU — don't second-guess it
+    # from WORLD_SIZE here (it may be unset, which would mis-scale max_steps).
+    if args.num_scenarios is not None:
+        args.max_steps = -1
+
     # Point the trainer at our subclass so it instantiates AWMRolloutWorker
     # instead of the base. The trainer still handles all weight-metadata and
     # tokenizer setup; we just swap the class before it calls AsyncRolloutWorker().
@@ -900,6 +917,11 @@ def main() -> None:
         processing_class=tokenizer,
         environment_factory=lambda: AWMEnvironment(args.env_url),
     )
+
+    # AsyncGRPOTrainer.__init__ derives max_steps from len(dataset) and
+    # accelerator.num_processes when it's <= 0; surface the resulting step target.
+    if trainer.is_world_process_zero():
+        print(f"Training to max_steps={trainer.args.max_steps} over {len(dataset)} dataset groups")
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
