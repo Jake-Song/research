@@ -10,9 +10,9 @@ uv run hf auth login --token "${HF_TOKEN}"
 # /v1/completions doesn't accept thinking_token_budget upstream; patch it in.
 uv run python "$(dirname "$0")/patch_vllm_thinking_budget.py"
 
-CUDA_VISIBLE_DEVICES=0,1 VLLM_SERVER_DEV_MODE=1 \
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 VLLM_SERVER_DEV_MODE=1 \
     uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
-        --tensor-parallel-size 2 \
+        --tensor-parallel-size 6 \
         --max-model-len 32768 \
         --logprobs-mode processed_logprobs \
         --reasoning-parser deepseek_r1 \

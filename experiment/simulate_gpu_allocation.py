@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-size",
         type=int,
-        default=500,
+        default=1000,
         help="Number of prompt groups in the dataset.",
     )
     parser.add_argument(
@@ -136,7 +136,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--samples-per-sampling-batch", type=int, default=60)
     parser.add_argument("--sampling-batch-seconds", type=int, default=370)
-    parser.add_argument("--per-device-batch-size", type=int, default=8)
+    parser.add_argument("--per-device-batch-size", type=int, default=4)
     parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
     parser.add_argument("--training-step-seconds", type=int, default=25)
     parser.add_argument(

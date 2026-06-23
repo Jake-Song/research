@@ -27,8 +27,8 @@ rollout:
 
 training:
   output_dir: Qwen3-4B-Thinking-awm-async-grpo
-  gradient_accumulation_steps: 16
-  per_device_batch_size: 1
+  gradient_accumulation_steps: 8
+  per_device_batch_size: 4
   learning_rate: 7.0e-7
   optim: adamw_torch_fused
   max_steps: -1
