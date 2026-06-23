@@ -611,8 +611,18 @@ class AWMRolloutWorker(AsyncRolloutWorker):
 # ---------------------------------------------------------------------------
 
 
-def build_dataset(env_url: str, dataset_size: int, dataset_start: int = 0) -> Dataset:
-    """List AWM scenarios/tasks and build the GRPO prompt dataset."""
+def build_dataset(
+    env_url: str,
+    dataset_size: int,
+    dataset_start: int = 0,
+    num_scenarios: int | None = None,
+) -> Dataset:
+    """List AWM scenarios/tasks and build the GRPO prompt dataset.
+
+    When num_scenarios is set, the dataset is sized by unique-scenario coverage
+    instead of dataset_size: scan the shuffled rows from dataset_start until that
+    many distinct scenarios have been seen, and take exactly those rows.
+    """
     env = AWMEnv(base_url=env_url).sync()
     with env:
         result = env.step(CallToolAction(tool_name="__list_scenarios__", arguments={}))
@@ -644,7 +654,18 @@ def build_dataset(env_url: str, dataset_size: int, dataset_start: int = 0) -> Da
     # The fixed seed makes the shuffled order identical across runs, so a
     # warm-started run can continue at index dataset_start (= sum of prior
     # runs' dataset sizes) instead of replaying the same rows.
-    end = min(dataset_start + dataset_size, len(dataset))
+    if num_scenarios is not None:
+        # Grow the slice from dataset_start until num_scenarios distinct
+        # scenarios are covered; the dataset size is whatever that took.
+        seen: set[str] = set()
+        end = dataset_start
+        for name in dataset["scenario"][dataset_start:]:
+            seen.add(name)
+            end += 1
+            if len(seen) >= num_scenarios:
+                break
+    else:
+        end = min(dataset_start + dataset_size, len(dataset))
     return dataset.select(range(dataset_start, end))
 
 
@@ -690,6 +711,14 @@ def parse_args() -> argparse.Namespace:
         default=DATASET_CONFIG["start"],
         help="Start index into the shuffled dataset; for continual training set"
         " this to the sum of previous runs' dataset sizes.",
+    )
+    parser.add_argument(
+        "--num-scenarios",
+        type=int,
+        default=DATASET_CONFIG.get("num_scenarios"),
+        help="If set, size the dataset by unique-scenario coverage instead of"
+        " --dataset-size: scan the shuffled dataset from --dataset-start until"
+        " this many distinct scenarios are covered. Overrides --dataset-size.",
     )
     parser.add_argument("--num-generations", type=int, default=ROLLOUT_CONFIG["num_generations"])
     parser.add_argument("--max-turns", type=int, default=ROLLOUT_CONFIG["max_turns"])
@@ -779,7 +808,9 @@ def main() -> None:
                 os.remove(f)
     CONTEXT_WINDOW_TURNS = args.context_window_turns
 
-    dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
+    dataset = build_dataset(
+        args.env_url, args.dataset_size, args.dataset_start, args.num_scenarios
+    )
 
     # Point the trainer at our subclass so it instantiates AWMRolloutWorker
     # instead of the base. The trainer still handles all weight-metadata and

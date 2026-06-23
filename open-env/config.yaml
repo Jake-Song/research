@@ -17,6 +17,7 @@ verifier:
 dataset:
   size: 1000
   start: 0
+  num_scenarios: null  # if set, size by unique-scenario coverage instead of size
 
 rollout:
   num_generations: 8
