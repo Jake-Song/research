@@ -412,3 +412,67 @@ Of 625 non-complete rollouts:
 2. **Increase `max_completion_tokens` or restore `--thinking-token-budget`** — the 21% `direct_mcp_names` rate is elevated because completions are hitting the token ceiling mid-think, causing the model to emit bare tool names. This is an infra/config fix, not a prompt fix.
 3. **Scoring failures (10.2%) are force-terminate artifacts** — not judge/server reliability issues. No action needed beyond noting they add noise.
 4. Mean solve-rate 0.45 is slightly below ideal 0.5, pulled down by the excess of never-solved tasks. Pruning/replacing those should push the calibration into the ideal band.
+
+---
+
+## 2026-06-23 — rollouts.jsonl + calibration.jsonl (652 rollouts)
+
+**Run scale:** 652 rollouts, 87 groups (72 full at size 8/16, 15 truncated tail
+partials from shutdown). Mean reward **0.453**. 12 model versions — a short run
+(~12 optimizer steps).
+
+### Reward trend — flat
+Reward by tenth: `0.42, 0.52, 0.34, 0.50, 0.56, 0.34, 0.54, 0.47, 0.34, 0.51, 0.50`.
+No upward trend. Histogram: `1.0×274 (complete), 0.1×216 (incomplete/scoring-fail),
+0.0×162 (agent_error)`.
+
+### Why it's flat: zero-variance + bimodal difficulty
+- **Zero-variance: 18/72 full groups (25%)** — identical reward across generations
+  → zero GRPO advantage, no gradient. (All-groups count 21/87 is inflated by the
+  15 truncated partials; lead with the 25%.) Note this run's 25% is much healthier
+  than the 2026-06-17 run's 47%.
+- **Difficulty calibration** (full groups): never-solved (0%) **21 (29%)**,
+  always-solved (100%) 12 (17%), useful spread 39/72 (54%). Mean solve-rate 0.44
+  (ideal ~0.5). **never-solved (21) > always-solved (12)** — dead-hard tasks are
+  the bigger drag; filter weighted toward pruning the never-solved end.
+- Hard-zero scenarios: `iot_smart_infrastructure_management_1` (0.00),
+  `booking_marketplace_5`, `analytics_dashboard_4`, `messaging_communications_1`
+  (~0.01–0.03). 12 scenarios sit at exactly 1.000 (mastered).
+
+### calibration.jsonl agrees
+72 groups: `learnable 37, uncertain 18, mastered 12, infrastructure_failure 3,
+all_failed 1, model_misbehavior 1`. infra failures: `banking_4#2`,
+`practice_management_4#3`, `tutoring_education_marketplace_1#2`.
+
+### Failure triage (294 model-fault rollouts: incomplete + agent_error)
+| category | count | % |
+|---|---|---|
+| proper_wrapper (correct mechanics, wrong answer) | 182 | 62% |
+| direct_mcp_names (bypasses call_tool) | 106 | 36% |
+| no_tool_calls | 6 | 2% |
+| truncated (empty last assistant content) | 13 | 4% |
+
+- **direct_mcp_names (36%) mostly self-recovers**: 77/106 retry correctly via
+  `call_tool` in the same rollout; only **29 never wrap** and waste the rollout.
+  Still **244 wasted direct-name calls** (burned turns even when recovered).
+  Unlike the 2026-06-17 run, **truncation is NOT the driver here** — only 13/294
+  (4%) end with empty assistant content, so the bare-name calls are not mid-think
+  cutoffs. The system prompt already hammers the `call_tool` rule; the prose fix
+  has plateaued — needs RL signal or few-shot, not more prose.
+- **proper_wrapper (62%)** are genuine task/grounding errors — the real signal.
+  E.g. `enterprise_admin_portal_1#4`: cancelled a meal order with
+  `validate_cutoff`, got a rejection, accepted it → judged incomplete.
+
+### Scoring failures (infra noise, forced to 0.1)
+84/652 (13%): `server_error 45, code_verify_error 17, no_verifier 16,
+llm_judge_error 6`. Dilutes variance and inflates the uncertain/zero-variance
+counts. `server_error` (45) is the largest non-judged bucket — worth chasing.
+
+### Takeaways
+1. Flat curve is **calibration, not per-trajectory pathology**: 25% zero-variance
+   + 29% never-solved = large no-gradient fraction. Add difficulty filtering,
+   weighted toward dropping never-solved tasks.
+2. `direct_mcp_names` self-corrects 73% of the time and is **not** truncation-driven
+   this run (contrast 2026-06-17); the prose fix has plateaued.
+3. Cut the 13% infra scoring-failure rate (esp. `server_error`) to recover signal.
+4. Truncation (4%) and refusals (2%) are not the bottleneck here.

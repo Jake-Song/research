@@ -7,7 +7,7 @@ Inspect a `rollouts.jsonl` file written by `open-env/openenv_awm_async_grpo.py` 
 
 ### Part 1: Locate the file
 
-If the user didn't give a path, look for (in order): a path mentioned in the conversation, `<output_dir>/rollouts.jsonl` from the run being discussed, or `rollouts.jsonl` in the repo root (typically scp'd back from the GPU node). Files are tens of MB — never load with the Read tool; stream with python via Bash.
+If the user didn't give a path, look for (in order): a path mentioned in the conversation, `<output_dir>/rollouts.jsonl` from the run being discussed, `experiment/rollouts.jsonl`, or `rollouts.jsonl` in the repo root (typically scp'd back from the GPU node). Files are tens of MB — never load with the Read tool; stream with python via Bash.
 
 ### Part 2: Know the schema
 
@@ -110,4 +110,4 @@ Also check the truncation signature: rollouts whose last assistant message has n
 
 Summarize findings in prose: overall reward + trend, which scenarios drag the mean down, and what the failing trajectories actually do (e.g. "model claims it has no tools instead of calling list_tools"). Quote short transcript excerpts as evidence.
 
-Append the report to `LOG.md` in the repo root (create it if missing) under a heading like `## YYYY-MM-DD — <path to rollouts.jsonl>`, then give the user a brief recap in chat and point them to the LOG.md entry.
+Append the report to `experiment/LOG.md` (the canonical training log; create it if missing) under a heading like `## YYYY-MM-DD — <path to rollouts.jsonl>`, then give the user a brief recap in chat and point them to the LOG.md entry.
