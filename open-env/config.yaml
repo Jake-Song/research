@@ -19,7 +19,7 @@ dataset:
   start: 0
 
 rollout:
-  num_generations: 16
+  num_generations: 8
   max_turns: 20
   context_window_turns: 3
   max_completion_length: 4096
@@ -27,8 +27,8 @@ rollout:
 
 training:
   output_dir: Qwen3-4B-Thinking-awm-async-grpo
-  gradient_accumulation_steps: 8
-  per_device_batch_size: 4
+  gradient_accumulation_steps: 16
+  per_device_batch_size: 2
   learning_rate: 7.0e-7
   optim: adamw_torch_fused
   max_steps: -1
