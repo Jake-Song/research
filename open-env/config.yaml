@@ -1,0 +1,52 @@
+model:
+  id: Qwen/Qwen3-4B-Thinking-2507
+  resume_from_checkpoint: null
+
+environment:
+  url: http://localhost:8899
+  message_timeout_s: 1200.0
+  connect_timeout_s: 300.0
+  ws_ping_timeout_s: 1800.0
+  reset_concurrency: 32
+  verifier_mode: sql
+
+verifier:
+  llm_base_url: null
+  llm_model: null
+
+dataset:
+  size: 1000
+  start: 0
+
+rollout:
+  num_generations: 16
+  max_turns: 20
+  context_window_turns: 3
+  max_completion_length: 4096
+  thinking_token_budget: null
+
+training:
+  output_dir: Qwen3-4B-Thinking-awm-async-grpo
+  gradient_accumulation_steps: 16
+  per_device_batch_size: 1
+  learning_rate: 7.0e-7
+  optim: adamw_torch_fused
+  max_steps: -1
+  num_epochs: 1
+
+checkpointing:
+  save_steps: 30
+  save_total_limit: null
+  logging_steps: 1
+
+vllm:
+  host: 127.0.0.1
+  port: 8000
+  timeout_s: 1200.0
+
+hub:
+  push_to_hub: true
+
+wandb:
+  project: openenv-awm-thinking
+  name: awm-thinking-async-grpo

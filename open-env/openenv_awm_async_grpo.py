@@ -55,8 +55,11 @@ import asyncio
 from collections import Counter
 import json
 import logging
+from pathlib import Path
 import statistics
 from datetime import date
+
+import yaml
 
 from datasets import Dataset
 from trl.chat_template_utils import parse_response
@@ -70,6 +73,20 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+with Path(__file__).with_name("config.yaml").open(encoding="utf-8") as f:
+    CONFIG = yaml.safe_load(f)
+
+MODEL_CONFIG = CONFIG["model"]
+ENVIRONMENT_CONFIG = CONFIG["environment"]
+VERIFIER_CONFIG = CONFIG["verifier"]
+DATASET_CONFIG = CONFIG["dataset"]
+ROLLOUT_CONFIG = CONFIG["rollout"]
+TRAINING_CONFIG = CONFIG["training"]
+CHECKPOINTING_CONFIG = CONFIG["checkpointing"]
+VLLM_CONFIG = CONFIG["vllm"]
+HUB_CONFIG = CONFIG["hub"]
+WANDB_CONFIG = CONFIG["wandb"]
 
 
 SYSTEM_PROMPT = """\
@@ -132,7 +149,7 @@ def format_tools(tools) -> str:
 # ---------------------------------------------------------------------------
 
 _MAX_TOOL_RESPONSE_CHARS = 2000
-MESSAGE_TIMEOUT_S = 1200.0
+MESSAGE_TIMEOUT_S = float(ENVIRONMENT_CONFIG["message_timeout_s"])
 
 # Limits simultaneous env.connect()+reset() calls to prevent bursting the server's
 # subprocess-spawn accept loop. Set via --reset-concurrency (default 32).
@@ -144,7 +161,7 @@ _RESET_SEMAPHORE: asyncio.Semaphore | None = None
 # (examples/agent_world_model/example_stress_test.py), bump the connect timeout so
 # those handshakes ride out the burst. The server supports the concurrency itself
 # (AWMEnvironment.SUPPORTS_CONCURRENT_SESSIONS=True, MAX_CONCURRENT_ENVS unbounded).
-CONNECT_TIMEOUT_S = 300.0
+CONNECT_TIMEOUT_S = float(ENVIRONMENT_CONFIG["connect_timeout_s"])
 
 # The OpenEnv websocket client (EnvClient.connect) opens connections with the
 # `websockets` library default keepalive: a ping every 20s, dropping the
@@ -154,7 +171,7 @@ CONNECT_TIMEOUT_S = 300.0
 # `1011 keepalive ping timeout`. connect() takes no ping kwargs, so bump the
 # keepalive grace well past MESSAGE_TIMEOUT_S by patching the module-level
 # ws_connect — it then only fires on a genuinely dead peer.
-WS_PING_TIMEOUT_S = 1800.0
+WS_PING_TIMEOUT_S = float(ENVIRONMENT_CONFIG["ws_ping_timeout_s"])
 _orig_ws_connect = _env_client.ws_connect
 def _ws_connect_long_keepalive(*args, **kwargs):
     kwargs.setdefault("ping_interval", WS_PING_TIMEOUT_S)
@@ -204,10 +221,16 @@ class AWMEnvironment:
             await self.env.reset(
             scenario=scenario,
             task_idx=task_idx,
-            verifier_mode="sql",
-            llm_base_url=os.environ.get("OPENENV_AWM_LLM_BASE_URL"),
+            verifier_mode=ENVIRONMENT_CONFIG["verifier_mode"],
+            llm_base_url=(
+                os.environ.get("OPENENV_AWM_LLM_BASE_URL")
+                or VERIFIER_CONFIG["llm_base_url"]
+            ),
             llm_api_key=os.environ.get("OPENENV_AWM_LLM_API_KEY"),
-            llm_model=os.environ.get("OPENENV_AWM_LLM_MODEL")
+            llm_model=(
+                os.environ.get("OPENENV_AWM_LLM_MODEL")
+                or VERIFIER_CONFIG["llm_model"]
+            ),
         )
 
     async def list_tools(self) -> str:
@@ -648,59 +671,98 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Async GRPO training for AWM agent tasks.")
     parser.add_argument(
         "--model-id",
-        default="Qwen/Qwen3-4B-Thinking-2507",
+        default=MODEL_CONFIG["id"],
         help="Base HF model, or a previous run's output dir / checkpoint-N dir / Hub"
         " repo to warm-start from (continual training). Use a fresh --output-dir.",
     )
-    parser.add_argument("--env-url", default="http://localhost:8899")
-    parser.add_argument("--output-dir", default="Qwen3-4B-Thinking-awm-async-grpo")
-    parser.add_argument("--dataset-size", type=int, default=1000)
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        default=MODEL_CONFIG["resume_from_checkpoint"],
+        help="Checkpoint-N directory to resume exactly, including optimizer, scheduler,"
+        " RNG, and global step. Use a --max-steps value above the saved step.",
+    )
+    parser.add_argument("--env-url", default=ENVIRONMENT_CONFIG["url"])
+    parser.add_argument("--output-dir", default=TRAINING_CONFIG["output_dir"])
+    parser.add_argument("--dataset-size", type=int, default=DATASET_CONFIG["size"])
     parser.add_argument(
         "--dataset-start",
         type=int,
-        default=0,
+        default=DATASET_CONFIG["start"],
         help="Start index into the shuffled dataset; for continual training set"
         " this to the sum of previous runs' dataset sizes.",
     )
-    parser.add_argument("--num-generations", type=int, default=16)
-    parser.add_argument("--max-turns", type=int, default=20)
+    parser.add_argument("--num-generations", type=int, default=ROLLOUT_CONFIG["num_generations"])
+    parser.add_argument("--max-turns", type=int, default=ROLLOUT_CONFIG["max_turns"])
     parser.add_argument(
         "--context-window-turns",
         type=int,
-        default=3,
+        default=ROLLOUT_CONFIG["context_window_turns"],
         help="Each per-turn training sample keeps system + initial user + the prefix"
         " through the list_tools exchange + this many most recent turns.",
     )
-    parser.add_argument("--max-completion-length", type=int, default=4096)
-    parser.add_argument("--thinking-token-budget", type=int, default=None)
-    parser.add_argument("--gradient-accumulation-steps", type=int, default=16)
-    parser.add_argument("--per-device-batch-size", type=int, default=1)
-    parser.add_argument("--learning-rate", type=float, default=7e-7)
-    parser.add_argument("--optim", default="adamw_torch_fused")
-    # parser.add_argument("--max-steps", type=int, default=None)
-    parser.add_argument("--reset-concurrency", type=int, default=32,
+    parser.add_argument(
+        "--max-completion-length",
+        type=int,
+        default=ROLLOUT_CONFIG["max_completion_length"],
+    )
+    parser.add_argument(
+        "--thinking-token-budget",
+        type=int,
+        default=ROLLOUT_CONFIG["thinking_token_budget"],
+    )
+    parser.add_argument(
+        "--gradient-accumulation-steps",
+        type=int,
+        default=TRAINING_CONFIG["gradient_accumulation_steps"],
+    )
+    parser.add_argument(
+        "--per-device-batch-size",
+        type=int,
+        default=TRAINING_CONFIG["per_device_batch_size"],
+    )
+    parser.add_argument(
+        "--learning-rate", type=float, default=TRAINING_CONFIG["learning_rate"]
+    )
+    parser.add_argument("--optim", default=TRAINING_CONFIG["optim"])
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=TRAINING_CONFIG["max_steps"],
+        help="Absolute optimizer-step target; -1 derives it from dataset size and epochs.",
+    )
+    parser.add_argument("--reset-concurrency", type=int,
+                        default=ENVIRONMENT_CONFIG["reset_concurrency"],
                         help="Max simultaneous env connect+reset calls.")
-    parser.add_argument("--num-epochs", type=int, default=1)
-    parser.add_argument("--save-steps", type=int, default=30)
-    parser.add_argument("--save-total-limit", type=int, default=None)
-    parser.add_argument("--logging-steps", type=int, default=1)
-    parser.add_argument("--vllm-server-host", default="127.0.0.1")
-    parser.add_argument("--vllm-server-port", type=int, default=8000)
-    parser.add_argument("--vllm-server-timeout", type=float, default=1200.0)
-    parser.add_argument("--push-to-hub", action="store_true", default=True)
+    parser.add_argument("--num-epochs", type=int, default=TRAINING_CONFIG["num_epochs"])
+    parser.add_argument("--save-steps", type=int, default=CHECKPOINTING_CONFIG["save_steps"])
+    parser.add_argument(
+        "--save-total-limit", type=int, default=CHECKPOINTING_CONFIG["save_total_limit"]
+    )
+    parser.add_argument(
+        "--logging-steps", type=int, default=CHECKPOINTING_CONFIG["logging_steps"]
+    )
+    parser.add_argument("--vllm-server-host", default=VLLM_CONFIG["host"])
+    parser.add_argument("--vllm-server-port", type=int, default=VLLM_CONFIG["port"])
+    parser.add_argument(
+        "--vllm-server-timeout", type=float, default=VLLM_CONFIG["timeout_s"]
+    )
+    parser.add_argument(
+        "--push-to-hub", action="store_true", default=HUB_CONFIG["push_to_hub"]
+    )
     parser.add_argument("--no-push-to-hub", dest="push_to_hub", action="store_false")
-    parser.add_argument("--wandb-project", default="openenv-awm-thinking")
-    parser.add_argument("--wandb-name", default="awm-thinking-async-grpo")
+    parser.add_argument("--wandb-project", default=WANDB_CONFIG["project"])
+    parser.add_argument("--wandb-name", default=WANDB_CONFIG["name"])
     return parser.parse_args()
 
 
 def main() -> None:
+    args = parse_args()
+
     import wandb
 
     from transformers import AutoTokenizer
     from trl.chat_template_utils import qwen3_chat_template
 
-    args = parse_args()
     is_main_process = os.environ.get("LOCAL_RANK", "0") == "0"
     if is_main_process:
         wandb.login(key=os.environ.get("WANDB_API_KEY"))
@@ -711,9 +773,10 @@ def main() -> None:
     os.makedirs(args.output_dir, exist_ok=True)
     TRAJECTORY_FILE = os.path.join(args.output_dir, "rollouts.jsonl")
     CALIBRATION_FILE = os.path.join(args.output_dir, "calibration.jsonl")
-    for f in (TRAJECTORY_FILE, CALIBRATION_FILE):
-        if os.path.exists(f):
-            os.remove(f)
+    if args.resume_from_checkpoint is None:
+        for f in (TRAJECTORY_FILE, CALIBRATION_FILE):
+            if os.path.exists(f):
+                os.remove(f)
     CONTEXT_WINDOW_TURNS = args.context_window_turns
 
     dataset = build_dataset(args.env_url, args.dataset_size, args.dataset_start)
@@ -735,7 +798,10 @@ def main() -> None:
         model_init_kwargs={"attn_implementation": "flash_attention_3"},
         # Training schedule / optimization
         num_train_epochs=args.num_epochs,
-        # max_steps=args.max_steps,
+        max_steps=args.max_steps,
+        # Rollout batches are generated asynchronously and cannot be replayed by
+        # Transformers' normal dataloader fast-forward on checkpoint resume.
+        ignore_data_skip=args.resume_from_checkpoint is not None,
         learning_rate=args.learning_rate,
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         per_device_train_batch_size=args.per_device_batch_size,
@@ -804,7 +870,7 @@ def main() -> None:
         environment_factory=lambda: AWMEnvironment(args.env_url),
     )
 
-    trainer.train()
+    trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
     trainer.save_model(args.output_dir)
     if args.push_to_hub:
