@@ -280,7 +280,7 @@ class AWMEnvironment:
 
         Status comes from the server's reward_type, not from the reward value:
         the env returns reward 0.0 for server-side scoring failures
-        (judge_error, no_verifier, server_error), which would otherwise be
+        (code_verify_error, llm_judge_error, no_verifier, server_error), which would otherwise be
         indistinguishable from a judged outcome. Judged outcomes (complete=1.0,
         incomplete=0.1, agent_error=0.0) keep the server's reward; scoring
         failures get 0.1 — the incomplete baseline — because a server failure
@@ -297,7 +297,7 @@ class AWMEnvironment:
         Returns:
             (reward, status) where status is "complete", "incomplete",
             "agent_error", a server-side failure reward_type (e.g.
-            "judge_error"), or "env_error:<ExceptionType>".
+            "code_verify_error" or "llm_judge_error"), or "env_error:<ExceptionType>".
         """
         try:
             r = await self.env.step(CallToolAction(tool_name="verify", arguments={"verifier_mode": "sql"}))
