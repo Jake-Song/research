@@ -125,7 +125,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dataset-size",
         type=int,
-        default=1000,
+        default=107,
         help="Number of prompt groups in the dataset.",
     )
     parser.add_argument(
@@ -146,6 +146,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum concurrent sampling tasks; -1 uses the TRL calculation.",
     )
     parser.add_argument("--max-staleness", type=int, default=4)
+    parser.add_argument(
+        "--gpu-hour-price",
+        type=float,
+        default=3.29,
+        help="USD per GPU-hour; cost bills all --total-gpus for the wall-clock run.",
+    )
     return parser.parse_args()
 
 
@@ -217,7 +223,7 @@ def main() -> None:
     print(
         "sampling  training  max_inflight  target_steps  training_steps  "
         "elapsed_hours  idle_hours_per_gpu  idle_fraction  groups_made  "
-        "samples_made  dropped_samples  samples_queued"
+        "samples_made  dropped_samples  samples_queued  cost_usd"
     )
     for result in results:
         idle_hours_per_gpu = (
@@ -230,6 +236,11 @@ def main() -> None:
                 / result["training_servers"]
                 / result["elapsed_seconds"]
             )
+        cost_usd = (
+            result["elapsed_seconds"] / 3600
+            * args.total_gpus
+            * args.gpu_hour_price
+        )
         print(
             f"{result['sampling_servers']:>8}  "
             f"{result['training_servers']:>8}  "
@@ -242,7 +253,8 @@ def main() -> None:
             f"{result['produced_groups']:>11}  "
             f"{result['produced_samples']:>12}  "
             f"{result['dropped_samples']:>15}  "
-            f"{result['queued_samples']:>14}"
+            f"{result['queued_samples']:>14}  "
+            f"{cost_usd:>8.2f}"
         )
 
     finished = [
@@ -252,12 +264,15 @@ def main() -> None:
     ]
     if finished:
         best = min(finished, key=lambda result: result["elapsed_seconds"])
+        best_cost = (
+            best["elapsed_seconds"] / 3600 * args.total_gpus * args.gpu_hour_price
+        )
         print(
             "\nBest allocation: "
             f"{best['sampling_servers']} sampling servers + "
             f"{best['training_servers']} training servers "
             f"({best['training_steps']} training steps in "
-            f"{best['elapsed_seconds'] / 3600:.2f} hours)"
+            f"{best['elapsed_seconds'] / 3600:.2f} hours, ${best_cost:,.2f})"
         )
     else:
         print("\nNo allocation could complete the dataset.")
