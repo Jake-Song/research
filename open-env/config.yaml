@@ -49,5 +49,5 @@ hub:
   push_to_hub: true
 
 wandb:
-  project: openenv-awm-thinking
-  name: awm-thinking-async-grpo
+  project: openenv-awm-continuous
+  name: awm-continuous-async-grpo-200
