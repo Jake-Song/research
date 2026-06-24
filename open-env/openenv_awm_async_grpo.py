@@ -372,8 +372,10 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     The model has no submit tool and never sees the reward value.
     """
 
-    # Set from --dynamic-sampling in main() before the trainer builds the worker.
+    # Set from --dynamic-sampling / --overlong-filtering in main() before the
+    # trainer builds the worker.
     _dynamic_sampling = False
+    _overlong_filtering = False
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -387,6 +389,10 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
         self._dropped_groups = 0
+        # id(completion) of rollouts whose final turn hit the generation length
+        # cap; their loss is masked (samples dropped) under overlong filtering.
+        self._overlong_completions: set[int] = set()
+        self._overlong_dropped = 0
 
     async def _score_group(self, group):
         # Attach a reward EMA to every sample so it shows up as a W&B curve.
@@ -416,6 +422,11 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 "[dynamic-sampling] dropped zero-advantage group "
                 f"(reward={samples[0].metrics['reward']:.3f}); total dropped={self._dropped_groups}"
             )
+            # The expansion loop below normally consumes these; drop them here so a
+            # dropped group doesn't leak per-completion turn/truncation markers.
+            for completion in group.completions:
+                self._rollout_turns.pop(id(completion), None)
+                self._overlong_completions.discard(id(completion))
             return []
         if self._dynamic_sampling:
             for s in samples:
@@ -428,6 +439,14 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         expanded = []
         for completion, s in zip(group.completions, samples):
             turns = self._rollout_turns.pop(id(completion), None)
+            overlong = id(completion) in self._overlong_completions
+            self._overlong_completions.discard(id(completion))
+            if self._overlong_filtering and overlong:
+                # DAPO overlong filtering: mask the loss of a length-truncated
+                # episode by dropping its training samples. Its reward stayed in the
+                # group advantage normalization above; it just yields no gradient.
+                self._overlong_dropped += 1
+                continue
             if not turns:
                 expanded.append(s)  # defensive; a rollout should always have turns
                 continue
@@ -444,6 +463,9 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                         metrics=dict(s.metrics),
                     )
                 )
+        if self._overlong_filtering:
+            for s in expanded:
+                s.metrics["overlong_filtering/dropped_samples"] = self._overlong_dropped
         return expanded
 
     def _windowed_messages(self, prompt, completion):
@@ -531,6 +553,13 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
             tool_mask.extend(turn_mask)
+            if len(turn_ids) >= self.max_tokens:
+                # The final turn hit the per-turn generation cap (max_completion_length),
+                # i.e. the model was cut off mid-generation. DAPO overlong filtering
+                # treats the truncated episode's reward as noise and masks its loss;
+                # we mark it here and drop its samples in _score_group. The reward is
+                # still scored below so it stays in the group's advantage normalization.
+                self._overlong_completions.add(id(completion))
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
@@ -758,6 +787,13 @@ def parse_args() -> argparse.Namespace:
         " reward (zero advantage / no gradient) and let the async generate loop"
         " refill with informative groups. Off by default (baseline GRPO).",
     )
+    parser.add_argument(
+        "--overlong-filtering",
+        action="store_true",
+        help="DAPO overlong filtering: mask the loss of episodes whose generation"
+        " was cut off at --max-completion-length (their reward is noise). The reward"
+        " still counts in group normalization. Off by default (baseline GRPO).",
+    )
     parser.add_argument("--max-turns", type=int, default=ROLLOUT_CONFIG["max_turns"])
     parser.add_argument(
         "--context-window-turns",
@@ -878,6 +914,7 @@ def main() -> None:
     from trl.experimental.async_grpo import async_grpo_trainer
     async_grpo_trainer.AsyncRolloutWorker = AWMRolloutWorker
     AWMRolloutWorker._dynamic_sampling = args.dynamic_sampling
+    AWMRolloutWorker._overlong_filtering = args.overlong_filtering
 
     # Qwen3-4B-Instruct-2507 ships its own chat template, which doesn't byte-for-byte
     # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
@@ -916,8 +953,8 @@ def main() -> None:
         max_tool_calling_iterations=args.max_turns,
         # Sequence-level importance sampling (GSPO), matching the AWM paper: one
         # length-normalized ratio per rollout instead of raw per-token ratios.
-        importance_sampling_level="sequence_token",
-        loss_type="grpo",
+        importance_sampling_level="token",
+        loss_type="dapo",
         epsilon_high=0.28,  # DAPO-style high clip for more exploration
         # No KL penalty: the async trainer has no reference model, and old_log_probs
         # are vLLM sampling logprobs, not reference logprobs. GSPO with beta=0.
