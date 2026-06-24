@@ -15,8 +15,8 @@ verifier:
   llm_model: null
 
 dataset:
-  size: 1000
-  start: 0
+  size: 120
+  start: 107
   num_scenarios: null  # if set, size by unique-scenario coverage instead of size
 
 rollout:
@@ -27,7 +27,7 @@ rollout:
   thinking_token_budget: null
 
 training:
-  output_dir: Qwen3-4B-Thinking-awm-async-grpo
+  output_dir: Qwen3-4B-Thinking-awm-async-grpo-200
   gradient_accumulation_steps: 16
   per_device_batch_size: 2
   learning_rate: 7.0e-7
