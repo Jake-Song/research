@@ -102,7 +102,7 @@ def parse_args() -> argparse.Namespace:
                         help="Fixed judge system-prompt tokens.")
     parser.add_argument("--max-turns", type=int, default=20,
                         help="Cap on agent turns per rollout (rollout.max_turns).")
-    parser.add_argument("--median-turns", type=float, default=10.0,
+    parser.add_argument("--median-turns", type=float, default=4.0,
                         help="Median agent turns per rollout.")
     parser.add_argument("--turns-sigma", type=float, default=0.5,
                         help="Log-space spread of rollout length.")
