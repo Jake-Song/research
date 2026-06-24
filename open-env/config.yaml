@@ -1,5 +1,5 @@
 model:
-  id: Qwen/Qwen3-4B-Thinking-2507
+  id: Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100
   resume_from_checkpoint: null
 
 environment:
