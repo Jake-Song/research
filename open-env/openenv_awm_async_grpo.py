@@ -376,6 +376,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     # trainer builds the worker.
     _dynamic_sampling = False
     _overlong_filtering = False
+    _soft_overlong_punishment = False
+    _soft_overlong_cache = 0  # DAPO L_cache in tokens; set in main()
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -517,6 +519,18 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             tool_messages.append({"role": "tool", "name": name, "content": str(result)})
         return tool_messages, n_calls, n_failures
 
+    def _length_penalty(self, length):
+        # DAPO Eq. (soft punish): 0 below (L_max - L_cache), a linear ramp to -1
+        # across the cache zone, -1 at/above L_max. L_max is the per-turn generation
+        # cap (self.max_tokens); L_cache is set from --soft-overlong-cache.
+        l_max = self.max_tokens
+        l_cache = self._soft_overlong_cache
+        if length <= l_max - l_cache:
+            return 0.0
+        if length >= l_max:
+            return -1.0
+        return ((l_max - l_cache) - length) / l_cache
+
     async def _generate_one(self, prompt, tool_dict):
         # Reimplements AsyncRolloutWorker._generate_one's multi-turn loop so we can
         # early-terminate on a tool-call format violation (the base loop has no such
@@ -529,6 +543,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         tool_failure_count = 0
         iteration_num = 0
         max_iterations = self.max_tool_calling_iterations
+        max_turn_len = 0  # longest single turn, for soft overlong punishment
         self._rollout_turns[id(completion)] = []
         while True:
             # Rebuild the windowed context each turn (no monotonic accumulation): the
@@ -553,6 +568,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             completion_ids.extend(turn_ids)
             completion_logprobs.extend(turn_logprobs)
             tool_mask.extend(turn_mask)
+            max_turn_len = max(max_turn_len, len(turn_ids))
             if len(turn_ids) >= self.max_tokens:
                 # The final turn hit the per-turn generation cap (max_completion_length),
                 # i.e. the model was cut off mid-generation. DAPO overlong filtering
@@ -565,6 +581,11 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # Normal termination: score the finished episode with the LLM judge.
                 try:
                     reward, status = await env._score_rollout()
+                    if self._soft_overlong_punishment:
+                        # DAPO soft overlong punishment: add a length penalty (0 to
+                        # -1) as the longest turn approaches the generation cap, so
+                        # the model learns to finish before it gets truncated.
+                        reward += self._length_penalty(max_turn_len)
                 except RuntimeError:
                     # The worker loop is shutting down (event loop / env client closing)
                     # while this rollout is still in flight — typically at a worker
@@ -794,6 +815,21 @@ def parse_args() -> argparse.Namespace:
         " was cut off at --max-completion-length (their reward is noise). The reward"
         " still counts in group normalization. Off by default (baseline GRPO).",
     )
+    parser.add_argument(
+        "--soft-overlong-punishment",
+        action="store_true",
+        help="DAPO soft overlong punishment: add a length penalty (0 to -1) to the"
+        " reward as the longest turn approaches --max-completion-length. Off by"
+        " default (baseline GRPO).",
+    )
+    parser.add_argument(
+        "--soft-overlong-cache",
+        type=int,
+        default=None,
+        help="L_cache token window for --soft-overlong-punishment: the penalty ramps"
+        " from 0 to -1 over the last L_cache tokens before the cap. Defaults to 20%%"
+        " of --max-completion-length (matching DAPO's 4096/20480).",
+    )
     parser.add_argument("--max-turns", type=int, default=ROLLOUT_CONFIG["max_turns"])
     parser.add_argument(
         "--context-window-turns",
@@ -915,6 +951,12 @@ def main() -> None:
     async_grpo_trainer.AsyncRolloutWorker = AWMRolloutWorker
     AWMRolloutWorker._dynamic_sampling = args.dynamic_sampling
     AWMRolloutWorker._overlong_filtering = args.overlong_filtering
+    AWMRolloutWorker._soft_overlong_punishment = args.soft_overlong_punishment
+    AWMRolloutWorker._soft_overlong_cache = (
+        args.soft_overlong_cache
+        if args.soft_overlong_cache is not None
+        else args.max_completion_length // 5
+    )
 
     # Qwen3-4B-Instruct-2507 ships its own chat template, which doesn't byte-for-byte
     # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
