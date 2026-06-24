@@ -372,6 +372,9 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     The model has no submit tool and never sees the reward value.
     """
 
+    # Set from --dynamic-sampling in main() before the trainer builds the worker.
+    _dynamic_sampling = False
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rollout_rewards: dict[int, float] = {}
@@ -383,6 +386,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self.reward_funcs = [self._verifier_reward]
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
+        self._dropped_groups = 0
 
     async def _score_group(self, group):
         # Attach a reward EMA to every sample so it shows up as a W&B curve.
@@ -398,6 +402,24 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         )
         for s in samples:
             s.metrics["reward_ema"] = self._reward_ema
+
+        # DAPO dynamic sampling: drop groups with zero reward std. When every
+        # rollout in a group lands on the same reward, the group-normalized
+        # advantage is 0 for all of them — no gradient, just batch noise. The
+        # async generate loop runs ahead, so dropping here makes the trainer pull
+        # the next informative group from the buffer: oversample-and-filter. EMA
+        # and calibration are updated above first, so monitoring still sees the
+        # dropped group's reward (only training skips it).
+        if self._dynamic_sampling and samples[0].metrics["reward_std"] < 1e-8:
+            self._dropped_groups += 1
+            logger.info(
+                "[dynamic-sampling] dropped zero-advantage group "
+                f"(reward={samples[0].metrics['reward']:.3f}); total dropped={self._dropped_groups}"
+            )
+            return []
+        if self._dynamic_sampling:
+            for s in samples:
+                s.metrics["dynamic_sampling/dropped_groups"] = self._dropped_groups
 
         # Sample splitting: replace each whole-rollout sample with one sample per
         # assistant turn, each carrying its windowed context (loss masked to the
@@ -729,6 +751,13 @@ def parse_args() -> argparse.Namespace:
         " this many distinct scenarios are covered. Overrides --dataset-size.",
     )
     parser.add_argument("--num-generations", type=int, default=ROLLOUT_CONFIG["num_generations"])
+    parser.add_argument(
+        "--dynamic-sampling",
+        action="store_true",
+        help="DAPO dynamic sampling: drop groups whose rollouts all get the same"
+        " reward (zero advantage / no gradient) and let the async generate loop"
+        " refill with informative groups. Off by default (baseline GRPO).",
+    )
     parser.add_argument("--max-turns", type=int, default=ROLLOUT_CONFIG["max_turns"])
     parser.add_argument(
         "--context-window-turns",
@@ -848,6 +877,7 @@ def main() -> None:
     # tokenizer setup; we just swap the class before it calls AsyncRolloutWorker().
     from trl.experimental.async_grpo import async_grpo_trainer
     async_grpo_trainer.AsyncRolloutWorker = AWMRolloutWorker
+    AWMRolloutWorker._dynamic_sampling = args.dynamic_sampling
 
     # Qwen3-4B-Instruct-2507 ships its own chat template, which doesn't byte-for-byte
     # match any template TRL knows, so add_response_schema() inside AsyncRolloutWorker
