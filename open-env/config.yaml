@@ -28,6 +28,7 @@ rollout:
 
 dapo:
   loss_type: dapo                # grpo = per-sample mean loss; dapo = token-level loss
+  importance_sampling_level: token  # token = per-token ratios (GRPO/DAPO); sequence = GSPO; sequence_token = GSPO-token
   dynamic_sampling: false        # drop zero-advantage (all-equal-reward) groups
   overlong_filtering: false      # mask loss of length-truncated episodes
   soft_overlong_punishment: false  # length penalty as turns approach the cap

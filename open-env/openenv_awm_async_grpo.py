@@ -1002,9 +1002,12 @@ def main() -> None:
         max_completion_length=args.max_completion_length,
         thinking_token_budget=args.thinking_token_budget,
         max_tool_calling_iterations=args.max_turns,
-        # Sequence-level importance sampling (GSPO), matching the AWM paper: one
-        # length-normalized ratio per rollout instead of raw per-token ratios.
-        importance_sampling_level="token",
+        # Importance sampling level (config dapo.importance_sampling_level):
+        # "token" = raw per-token ratios (GRPO/DAPO); "sequence" = GSPO (one
+        # length-normalized ratio per rollout); "sequence_token" = GSPO-token. The
+        # AWM paper used GSPO; "token" matches the DAPO recipe (per-token ratios +
+        # clip-higher + token-level loss).
+        importance_sampling_level=DAPO_CONFIG["importance_sampling_level"],
         loss_type=DAPO_CONFIG["loss_type"],
         epsilon_high=0.28,  # DAPO-style high clip for more exploration
         # No KL penalty: the async trainer has no reference model, and old_log_probs
