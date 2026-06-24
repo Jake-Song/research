@@ -25,6 +25,8 @@ rollout:
   context_window_turns: 3
   max_completion_length: 4096
   thinking_token_budget: null
+  max_staleness: 4          # max policy-version lag a rollout may have before it's discarded
+  max_inflight_tasks: -1    # concurrent rollouts; -1 => auto (max_staleness * batch * grad_accum * num_processes)
 
 dapo:
   loss_type: dapo                # grpo = per-sample mean loss; dapo = token-level loss
