@@ -476,3 +476,23 @@ counts. `server_error` (45) is the largest non-judged bucket — worth chasing.
    this run (contrast 2026-06-17); the prose fix has plateaued.
 3. Cut the 13% infra scoring-failure rate (esp. `server_error`) to recover signal.
 4. Truncation (4%) and refusals (2%) are not the bottleneck here.
+
+## 2026-06-24 — rollouts.jsonl + calibration.jsonl (repo root)
+
+**Run:** 1024 rollouts, 119 (scenario,task_idx) groups (86 full 8×, 33 shutdown partials).
+Companion `calibration.jsonl` = per-task difficulty classification, 109 tasks @ num_rollouts=8.
+
+**Overall reward 0.455.** Histogram: 1.0=432 (complete), 0.1=343 (partial/scoring-fail), 0.0=249 (agent_error). No format violations. Reward-by-tenth peaks mid-run (0.67) then decays to 0.28 at the tail — but the tail is dominated by shutdown partials, so read it as flat-ish, not regression.
+
+**Difficulty calibration (86 full groups):** mean solve-rate **0.47** — well-centered for GRPO. useful/spread = **48/86 (56%)**. Zero-variance = 22/86 (26%). Never-solved 24 (28%) vs always-solved 14 (16%): **dead-hard tasks are the bigger drag** → filtering should weight toward pruning/replacing never-solved over trivial-mastered.
+
+**Calibration file agrees:** learnable 56 (51%), uncertain 26 (24%), mastered 18 (17%), infrastructure_failure 9 (8%). Mean task reward 0.483, mean std 0.224.
+
+**Top actionable: scoring infrastructure, not the policy.** 386/1024 rollouts (38%) scored 0.1 — a chunk is verifier infra, not partial work. Status breakdown: code_verify_error 74, server_error 45, llm_judge_error 10, no_verifier 8. The 9 `infrastructure_failure` tasks (all valid_rollouts=0) are concentrated:
+- `code_verify_error` is whole-group on 7 tasks: payments_donations_1#5, social_friends_presence_management_1#0, logistics_management_5#7, iot_smart_home_device_management_2#6, learning_management_system_6#5, project_management_4#5, accounting_finance_1#9, booking_appointments_1#5 — the verifier code itself errors, forcing every rollout to 0.1 (reward_std=0). These contribute zero gradient and silently depress the mean.
+- `no_verifier` whole-group on healthcare_patient_portal_5#0.
+
+**Recommendations:**
+1. Fix/quarantine the 9 infra tasks (code_verify_error + no_verifier) before next run — they're 8 zero-variance groups masquerading as "hard."
+2. Prune/replace the ~24 never-solved groups (asymmetry favors this over cutting trivials).
+3. Real policy headroom is the 56% useful split @ mean 0.47 — calibration is healthy once infra noise is removed.
