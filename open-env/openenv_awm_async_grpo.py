@@ -82,6 +82,7 @@ ENVIRONMENT_CONFIG = CONFIG["environment"]
 VERIFIER_CONFIG = CONFIG["verifier"]
 DATASET_CONFIG = CONFIG["dataset"]
 ROLLOUT_CONFIG = CONFIG["rollout"]
+DAPO_CONFIG = CONFIG["dapo"]
 TRAINING_CONFIG = CONFIG["training"]
 CHECKPOINTING_CONFIG = CONFIG["checkpointing"]
 VLLM_CONFIG = CONFIG["vllm"]
@@ -804,28 +805,36 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--dynamic-sampling",
         action="store_true",
+        default=DAPO_CONFIG["dynamic_sampling"],
         help="DAPO dynamic sampling: drop groups whose rollouts all get the same"
         " reward (zero advantage / no gradient) and let the async generate loop"
-        " refill with informative groups. Off by default (baseline GRPO).",
+        " refill with informative groups. Default from config (dapo.dynamic_sampling).",
     )
+    parser.add_argument("--no-dynamic-sampling", dest="dynamic_sampling", action="store_false")
     parser.add_argument(
         "--overlong-filtering",
         action="store_true",
+        default=DAPO_CONFIG["overlong_filtering"],
         help="DAPO overlong filtering: mask the loss of episodes whose generation"
         " was cut off at --max-completion-length (their reward is noise). The reward"
-        " still counts in group normalization. Off by default (baseline GRPO).",
+        " still counts in group normalization. Default from config (dapo.overlong_filtering).",
     )
+    parser.add_argument("--no-overlong-filtering", dest="overlong_filtering", action="store_false")
     parser.add_argument(
         "--soft-overlong-punishment",
         action="store_true",
+        default=DAPO_CONFIG["soft_overlong_punishment"],
         help="DAPO soft overlong punishment: add a length penalty (0 to -1) to the"
-        " reward as the longest turn approaches --max-completion-length. Off by"
-        " default (baseline GRPO).",
+        " reward as the longest turn approaches --max-completion-length. Default from"
+        " config (dapo.soft_overlong_punishment).",
+    )
+    parser.add_argument(
+        "--no-soft-overlong-punishment", dest="soft_overlong_punishment", action="store_false"
     )
     parser.add_argument(
         "--soft-overlong-cache",
         type=int,
-        default=None,
+        default=DAPO_CONFIG["soft_overlong_cache"],
         help="L_cache token window for --soft-overlong-punishment: the penalty ramps"
         " from 0 to -1 over the last L_cache tokens before the cap. Defaults to 20%%"
         " of --max-completion-length (matching DAPO's 4096/20480).",

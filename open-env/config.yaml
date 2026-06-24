@@ -26,6 +26,12 @@ rollout:
   max_completion_length: 4096
   thinking_token_budget: null
 
+dapo:
+  dynamic_sampling: false        # drop zero-advantage (all-equal-reward) groups
+  overlong_filtering: false      # mask loss of length-truncated episodes
+  soft_overlong_punishment: false  # length penalty as turns approach the cap
+  soft_overlong_cache: null      # L_cache tokens; null => 20% of max_completion_length
+
 training:
   output_dir: Qwen3-4B-Thinking-awm-async-grpo-200
   gradient_accumulation_steps: 16
