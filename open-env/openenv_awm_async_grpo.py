@@ -816,6 +816,20 @@ def main() -> None:
                 os.remove(f)
     CONTEXT_WINDOW_TURNS = args.context_window_turns
 
+    if args.resume_from_checkpoint is not None:
+        import json as _json
+        state_path = os.path.join(args.resume_from_checkpoint, "trainer_state.json")
+        if os.path.exists(state_path):
+            with open(state_path) as _f:
+                _ckpt_state = _json.load(_f)
+            _global_step = _ckpt_state.get("global_step", 0)
+            _world_size = int(os.environ.get("WORLD_SIZE", 1))
+            _rows_consumed = _global_step * args.per_device_batch_size * _world_size * args.gradient_accumulation_steps
+            args.dataset_start += _rows_consumed
+            if is_main_process:
+                print(f"Resume: checkpoint step={_global_step}, rows_consumed={_rows_consumed}, "
+                      f"dataset_start adjusted to {args.dataset_start}")
+
     dataset = build_dataset(
         args.env_url, args.dataset_size, args.dataset_start, args.num_scenarios
     )

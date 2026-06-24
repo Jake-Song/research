@@ -11,7 +11,7 @@ uv run hf auth login --token "${HF_TOKEN}"
 uv run python "$(dirname "$0")/patch_vllm_thinking_budget.py"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 \
-    uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+    uv run vllm serve Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100 \
         --tensor-parallel-size 4 \
         --max-model-len 32768 \
         --logprobs-mode processed_logprobs \
