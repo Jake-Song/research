@@ -25,7 +25,11 @@ rollout:
   context_window_turns: 3
   max_completion_length: 4096
   thinking_token_budget: null
-  max_staleness: 4          # max policy-version lag a rollout may have before it's discarded
+  # Sized for ~26% of rollouts dropped by the DAPO filters: oversample by
+  # 1/(1-0.26) ~= 1.35x. Scaling max_staleness (4 -> 6, ~1.5x) grows the auto
+  # max_inflight_tasks proportionally and widens the staleness window to match,
+  # so the extra rollouts aren't discarded as stale before the trainer uses them.
+  max_staleness: 6          # max policy-version lag a rollout may have before it's discarded
   max_inflight_tasks: -1    # concurrent rollouts; -1 => auto (max_staleness * batch * grad_accum * num_processes)
 
 dapo:
