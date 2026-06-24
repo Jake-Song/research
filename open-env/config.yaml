@@ -27,6 +27,7 @@ rollout:
   thinking_token_budget: null
 
 dapo:
+  loss_type: dapo                # grpo = per-sample mean loss; dapo = token-level loss
   dynamic_sampling: false        # drop zero-advantage (all-equal-reward) groups
   overlong_filtering: false      # mask loss of length-truncated episodes
   soft_overlong_punishment: false  # length penalty as turns approach the cap
