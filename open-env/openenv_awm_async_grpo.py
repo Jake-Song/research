@@ -383,6 +383,11 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._rollout_rewards: dict[int, float] = {}
+        # Verifier reward before the soft-overlong length penalty, keyed by
+        # id(completion). Dynamic sampling decides the zero-advantage drop on
+        # these so the length penalty can't spread an all-failed group past the
+        # std filter; consumed (popped) in _score_group.
+        self._rollout_base_rewards: dict[int, float] = {}
         self._rollout_statuses: dict[int, str] = {}
         # Per-turn (windowed_prompt_ids, turn_ids, turn_mask, turn_logprobs) lists,
         # keyed by id(completion); consumed by _score_group to split each rollout
@@ -400,6 +405,10 @@ class AWMRolloutWorker(AsyncRolloutWorker):
     async def _score_group(self, group):
         # Attach a reward EMA to every sample so it shows up as a W&B curve.
         samples = await super()._score_group(group)
+        # Pop base rewards for this group's completions regardless of the
+        # early-return below, so the dict's lifetime tracks the group and can't
+        # leak when super() yields no samples.
+        base_rewards = [self._rollout_base_rewards.pop(id(c), 0.0) for c in group.completions]
         if not samples:
             return samples
         self._save_calibration(group, samples)
@@ -419,11 +428,26 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         # the next informative group from the buffer: oversample-and-filter. EMA
         # and calibration are updated above first, so monitoring still sees the
         # dropped group's reward (only training skips it).
-        if self._dynamic_sampling and samples[0].metrics["reward_std"] < 1e-8:
+        #
+        # Decide on the pre-penalty (base verifier) reward, popped here: the
+        # soft-overlong length penalty can spread an all-failed group's rewards
+        # (e.g. agent_error 0.0 -> -0.9/-0.6) into nonzero std, which would sneak
+        # a group with no actual task signal past the std filter. Checking the
+        # base reward drops it before the penalty rescues it. (base_rewards is
+        # popped above, before the early-return, to avoid leaking the dict.)
+        # Exception: an all-mastered group (every rollout solved, base all 1.0)
+        # that the soft-overlong penalty has spread is kept — the length variance
+        # across correct solutions is a weak but real "solve and be concise"
+        # gradient. Failed/partial groups (base < 1.0) get only length noise from
+        # the penalty, so they still drop.
+        base_flat = statistics.pstdev(base_rewards) < 1e-8
+        pen_std = statistics.pstdev([s.metrics["reward"] for s in samples])
+        mastered_length_signal = base_flat and base_rewards[0] == 1.0 and pen_std >= 1e-8
+        if self._dynamic_sampling and base_flat and not mastered_length_signal:
             self._dropped_groups += 1
             logger.info(
                 "[dynamic-sampling] dropped zero-advantage group "
-                f"(reward={samples[0].metrics['reward']:.3f}); total dropped={self._dropped_groups}"
+                f"(base_reward={base_rewards[0]:.3f}); total dropped={self._dropped_groups}"
             )
             # The expansion loop below normally consumes these; drop them here so a
             # dropped group doesn't leak per-completion turn/truncation markers.
@@ -582,6 +606,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # Normal termination: score the finished episode with the LLM judge.
                 try:
                     reward, status = await env._score_rollout()
+                    base_reward = reward
                     if self._soft_overlong_punishment:
                         # DAPO soft overlong punishment: add a length penalty (0 to
                         # -1) as the longest turn approaches the generation cap, so
@@ -595,7 +620,9 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # discarded anyway; swallow it so the worker isn't marked failed
                     # and check_health doesn't abort the whole run.
                     reward, status = 0.1, "rollout_error"
+                    base_reward = 0.1
                 self._rollout_rewards[id(completion)] = reward
+                self._rollout_base_rewards[id(completion)] = base_reward
                 self._rollout_statuses[id(completion)] = status
                 self._save_trajectory(env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
@@ -613,6 +640,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 # Keep the partial completion so the advantage applies to the tokens
                 # generated up to the violation; skip the judge entirely.
                 self._rollout_rewards[id(completion)] = -1.0
+                self._rollout_base_rewards[id(completion)] = -1.0
                 self._rollout_statuses[id(completion)] = "format_violation"
                 await env._close_session()
                 self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
