@@ -1,5 +1,5 @@
 model:
-  id: Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100
+  id: Qwen/Qwen3-4B-Thinking-2507
   resume_from_checkpoint: null
 
 environment:
@@ -7,7 +7,7 @@ environment:
   message_timeout_s: 1200.0
   connect_timeout_s: 300.0
   ws_ping_timeout_s: 1800.0
-  reset_concurrency: 256
+  reset_concurrency: 384
   verifier_mode: sql
 
 verifier:
@@ -15,8 +15,8 @@ verifier:
   llm_model: null
 
 dataset:
-  size: 120
-  start: 107
+  size: 107
+  start: 0
   num_scenarios: null  # if set, size by unique-scenario coverage instead of size
 
 rollout:
@@ -35,13 +35,13 @@ rollout:
 dapo:
   loss_type: dapo                # grpo = per-sample mean loss; dapo = token-level loss
   importance_sampling_level: token  # token = per-token ratios (GRPO/DAPO); sequence = GSPO; sequence_token = GSPO-token
-  dynamic_sampling: false        # drop zero-advantage (all-equal-reward) groups
-  overlong_filtering: false      # mask loss of length-truncated episodes
-  soft_overlong_punishment: false  # length penalty as turns approach the cap
+  dynamic_sampling: true        # drop zero-advantage (all-equal-reward) groups
+  overlong_filtering: true      # mask loss of length-truncated episodes
+  soft_overlong_punishment: true  # length penalty as turns approach the cap
   soft_overlong_cache: null      # L_cache tokens; null => 20% of max_completion_length
 
 training:
-  output_dir: Qwen3-4B-Thinking-awm-async-grpo-200
+  output_dir: Qwen3-4B-Thinking-awm-async-grpo-100
   gradient_accumulation_steps: 16
   per_device_batch_size: 2
   learning_rate: 7.0e-7
@@ -64,4 +64,4 @@ hub:
 
 wandb:
   project: openenv-awm-continuous
-  name: awm-continuous-async-grpo-200
+  name: awm-continuous-async-grpo-100

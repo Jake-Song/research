@@ -145,7 +145,7 @@ def parse_args() -> argparse.Namespace:
         default=-1,
         help="Maximum concurrent sampling tasks; -1 uses the TRL calculation.",
     )
-    parser.add_argument("--max-staleness", type=int, default=4)
+    parser.add_argument("--max-staleness", type=int, default=6)
     parser.add_argument(
         "--gpu-hour-price",
         type=float,
