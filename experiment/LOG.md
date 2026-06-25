@@ -496,3 +496,25 @@ Companion `calibration.jsonl` = per-task difficulty classification, 109 tasks @ 
 1. Fix/quarantine the 9 infra tasks (code_verify_error + no_verifier) before next run — they're 8 zero-variance groups masquerading as "hard."
 2. Prune/replace the ~24 never-solved groups (asymmetry favors this over cutting trivials).
 3. Real policy headroom is the 56% useful split @ mean 0.47 — calibration is healthy once infra noise is removed.
+
+## 2026-06-25 — rollouts.jsonl + calibration.jsonl (repo root, branch exp/awm-dapo)
+
+**Run:** 1037 rollouts, 105 (scenario,task_idx) groups (59 full 8×/16×, 46 shutdown/resample partials). Companion `calibration.jsonl` = 99 tasks @ num_rollouts=8. **This is the DAPO branch** — read the reward distribution accordingly.
+
+**Overall reward 0.269** (down from 0.455 last run, but not comparable — DAPO applies a soft-overlong length penalty, so long trajectories get net-negative reward). Histogram: 1.0=393 (complete), 0.1=249 (partial/scoring-fail), 0.0=150 (agent_error), plus **200 negatives** (74 at exactly −1.0, 126 fractional in the −1<x<0 penalty zone) and a long tail of fractional values. Reward-by-tenth hovers 0.2–0.4 mid-run, craters to −0.37 at the very tail (shutdown partials + accumulated length penalty).
+
+**The negatives are the DAPO length penalty, not format violations or truncation.** Negative-reward rollouts avg **38k completion chars** vs 25k for solved (>0.5); the exact −1.0 bucket is the longest at **43k chars**. Only 5/200 negatives end with an empty assistant message, so this is *not* runaway-`<think>`/`max_tokens` truncation — the model finishes properly but overshoots the soft length budget on long agent_error/incomplete trajectories (neg status: agent_error 108, incomplete 55, code_verify_error 18).
+
+**Difficulty calibration (59 full groups, solve=1.0):** mean solve-rate **0.44** (well-centered for GRPO). useful/spread = **34/59 (58%)**. Zero-variance = 9/59 (15%) full / 12/105 (11%) all. Never-solved **18 (31%)** vs always-solved **7 (12%)**: dead-hard tasks remain the bigger drag → filtering should weight toward pruning/replacing never-solved.
+
+**Calibration file (99 tasks):** learnable 55 (56%), uncertain 22 (22%), mastered 13 (13%), infrastructure_failure 7 (7%), all-failed 1, model_misbehavior 1. Mean task reward 0.334, mean std 0.343.
+
+**Failure triage (609 rollouts ≤0.1):** `proper_wrapper` 384 (63%), **`direct_mcp_names` 224 (37%)**, `no_tool_calls` 1. The wrapper-bypass is still the dominant *mechanical* failure — model calls an MCP tool by name (e.g. `list_robo_profiles`, `create_classified_listing_in_neighborhood`), the env returns a corrective `Unknown tool '...' The only tools you can call directly are ['call_tool','list_tools']`, and the model usually recovers via `call_tool` (e.g. `stock_trading_3#5`) — but it burns a turn each time and pads length (feeding the length penalty above). Mean 4.1 tool-calls/rollout (median 3, max 21).
+
+**Scoring infra noise:** 135/1037 (13%): server_error 56, code_verify_error 39, no_verifier 31, llm_judge_error 9, env_server_error:ConnectionClosedError 1. `server_error` (56) is the largest non-judged bucket and is up vs last run — worth chasing.
+
+**Recommendations:**
+1. The mean-reward drop vs 2026-06-24 is mostly the DAPO length penalty biting long trajectories, not a policy regression — judge this run by solve-rate (0.44) and the 58% useful split, both healthy.
+2. `direct_mcp_names` (37% of failures) inflates trajectory length → compounds the length penalty. The prose `call_tool` rule has plateaued; needs RL signal/few-shot.
+3. **Dynamic sampling (std<1e-8) does NOT catch these.** Of 18 never-solved full groups, only 2 have zero std and get dropped; the other **16 survive the filter** because the soft-overlong length penalty + the 0.0-vs-0.1 partial split give them non-zero reward_std (e.g. practice_management_4#3: [-0.9…0.1], std 0.38). They produce gradient with no actual task signal — pure length-shaping/incomplete-vs-error noise. A *solve-rate*-based difficulty filter would catch them where the *std*-based DAPO filter can't. Prune/replace these 16 (asymmetry still favors this over cutting the 7 trivial-mastered).
+4. Cut the 13% scoring-infra rate, esp. `server_error` (56) and `no_verifier` (31).
