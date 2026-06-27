@@ -19,7 +19,7 @@ MAX_NUM_SEQS="${MAX_NUM_SEQS:-512}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 
 CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 \
-    uv run vllm serve Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100 \
+    uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
         --tensor-parallel-size 4 \
         --max-model-len 32768 \
         --max-num-seqs "${MAX_NUM_SEQS}" \
