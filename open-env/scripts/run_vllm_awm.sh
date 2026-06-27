@@ -18,6 +18,7 @@ uv run python "$(dirname "$0")/patch_vllm_thinking_budget.py"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-512}"
 MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 
+<<<<<<< HEAD
 # 8-GPU node split: 6 GPUs here for vLLM, 2 (GPUs 6,7) for the FSDP2 trainer.
 # The model has 32 attention heads, so TP must divide 32 — plain TP=6 is invalid.
 # Factor 6 = TP(2) x PP(3): TP=2 keeps 16 q-heads / 4 kv-heads per GPU, and the
@@ -26,6 +27,11 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 VLLM_SERVER_DEV_MODE=1 \
     uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
         --tensor-parallel-size 2 \
         --pipeline-parallel-size 3 \
+=======
+CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 \
+    uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+        --tensor-parallel-size 4 \
+>>>>>>> cb0eb98 (fix run vllm script for experience)
         --max-model-len 32768 \
         --max-num-seqs "${MAX_NUM_SEQS}" \
         --max-num-batched-tokens "${MAX_NUM_BATCHED_TOKENS}" \
