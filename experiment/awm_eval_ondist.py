@@ -216,7 +216,7 @@ async def run_episode(env, llm, model, scenario, task_idx, args) -> dict:
     verify: StepResult[AWMObservation] = await env.step(
         CallToolAction(
             tool_name="verify",
-            arguments={"verifier_mode": "code", "final_answer": last_text},
+            arguments={"verifier_mode": args.verifier, "final_answer": last_text},
         )
     )
     reward = verify.reward
@@ -237,23 +237,34 @@ async def run_episode(env, llm, model, scenario, task_idx, args) -> dict:
 async def main(args):
     tasks = json.loads(Path(args.tasks).read_text())
     llm = AsyncOpenAI(base_url=args.endpoint, api_key=os.environ.get("OPENAI_API_KEY", "EMPTY"))
+    sem = asyncio.Semaphore(args.concurrency)
+    done = 0
 
-    records = []
-    async with AWMEnv(base_url=args.base_url) as env:
-        print(f"Running {len(tasks)} tasks against {args.model} @ {args.endpoint}")
-        for i, t in enumerate(tasks, 1):
-            sc, ti = t["scenario"], t["task_idx"]
+    async def worker(i, t):
+        nonlocal done
+        sc, ti = t["scenario"], t["task_idx"]
+        async with sem:
             try:
-                rec = await run_episode(env, llm, args.model, sc, ti, args)
+                # One env session per task — sessions are stateful, so concurrent
+                # tasks must not share a connection (mirrors the trainer's
+                # one-env-per-inflight-slot model).
+                async with AWMEnv(base_url=args.base_url) as env:
+                    rec = await run_episode(env, llm, args.model, sc, ti, args)
             except Exception as e:  # keep the sweep going
                 rec = {"scenario": sc, "task_idx": ti, "reward": None,
                        "reward_type": "error", "success": False, "tool_calls": 0,
                        "latency_s": None, "error": f"{type(e).__name__}: {e}"}
-            rec["train_solve_rate"] = t.get("train_solve_rate")
-            records.append(rec)
-            mark = "✓" if rec["success"] else "·"
-            print(f"  [{i}/{len(tasks)}] {mark} {sc}#{ti} "
-                  f"reward={rec['reward']} type={rec['reward_type']} tools={rec['tool_calls']}")
+        rec["train_solve_rate"] = t.get("train_solve_rate")
+        done += 1
+        mark = "✓" if rec["success"] else "·"
+        print(f"  [{done}/{len(tasks)}] {mark} {sc}#{ti} "
+              f"reward={rec['reward']} type={rec['reward_type']} tools={rec['tool_calls']}")
+        return i, rec
+
+    print(f"Running {len(tasks)} tasks against {args.model} @ {args.endpoint} "
+          f"(concurrency={args.concurrency})")
+    results = await asyncio.gather(*(worker(i, t) for i, t in enumerate(tasks)))
+    records = [rec for _, rec in sorted(results, key=lambda x: x[0])]
 
     n = len(records)
     succ = sum(r["success"] for r in records)
@@ -284,6 +295,9 @@ def parse_args():
     p.add_argument("--endpoint", default=os.environ.get("ENDPOINT_URL", "http://localhost:8000/v1"))
     p.add_argument("--base-url", default="https://chilled-agent-world-model-env.hf.space")
     p.add_argument("--tasks", default=str(Path(__file__).parent / "awm_eval_tasks.json"))
+    p.add_argument("--verifier", default="code", choices=["sql", "code"],
+                   help="code = deterministic only (default); sql = code-augmented LLM judge (matches training reward)")
+    p.add_argument("--concurrency", type=int, default=50, help="tasks run in parallel")
     p.add_argument("--max-turns", type=int, default=20)
     p.add_argument("--temperature", type=float, default=1.0)
     p.add_argument("--max-tokens", type=int, default=4096)
