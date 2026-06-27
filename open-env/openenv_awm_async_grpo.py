@@ -15,8 +15,9 @@ on the slot's env immediately after each rollout completes (while the env DB
 state is still valid). The reward is stored by completion identity and retrieved
 by `_verifier_reward`. The model never sees the reward — it is not a tool.
 
-Eight-GPU cloud setup: vLLM tensor-parallel on GPUs 0,1 + 6 FSDP2 trainer GPUs (2–7), with
-NCCL weight transfer. The rollout worker only runs on rank 0, so the 6 trainer ranks
+Eight-GPU cloud setup: vLLM on GPUs 0–5 (TP=2 x PP=3, since the model's 32
+attention heads aren't divisible by 6) + 2 FSDP2 trainer GPUs (6,7), with NCCL
+weight transfer. The rollout worker only runs on rank 0, so both trainer ranks
 share the single vLLM server. See open-env/scripts/run_vllm_awm.sh and
 open-env/scripts/run_trainer_awm.sh; the trainer launch uses the FSDP2 accelerate
 config at open-env/configs/fsdp2.yaml.
@@ -26,10 +27,10 @@ config at open-env/configs/fsdp2.yaml.
     PYTHONPATH=src:envs uv run uvicorn \
       envs.agent_world_model_env.server.app:app --host 0.0.0.0 --port 8899 --ws-ping-interval 1800 --ws-ping-timeout 1800
 
-    # Terminal 2 - vLLM server on GPU 0,1
+    # Terminal 2 - vLLM server on GPUs 0-5 (TP=2 x PP=3)
     bash open-env/scripts/run_vllm_awm.sh
 
-    # Terminal 3 - 6 FSDP2 trainers on GPUs 2-7 (sql verifier needs an LLM judge)
+    # Terminal 3 - 2 FSDP2 trainers on GPUs 6,7 (sql verifier needs an LLM judge)
     export OPENENV_AWM_LLM_BASE_URL=... OPENENV_AWM_LLM_API_KEY=... OPENENV_AWM_LLM_MODEL=...
     bash open-env/scripts/run_trainer_awm.sh --env-url http://localhost:8899
 
