@@ -29,7 +29,7 @@ CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 VLLM_SERVER_DEV_MODE=1 \
         --pipeline-parallel-size 3 \
 =======
 CUDA_VISIBLE_DEVICES=0,1,2,3 VLLM_SERVER_DEV_MODE=1 \
-    uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+    uv run vllm serve Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100 \
         --tensor-parallel-size 4 \
 >>>>>>> cb0eb98 (fix run vllm script for experience)
         --max-model-len 32768 \
