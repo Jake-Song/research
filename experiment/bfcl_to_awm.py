@@ -3,9 +3,9 @@
 The AWM rollout format (see `rollouts.jsonl`) is one record per
 `(scenario, task_idx)` whose `prompt` is a chat message list beginning with the
 AWM MCP system prompt. A BFCL `multi_turn_base` entry packs several *sequential*
-user turns into one episode, and turn k depends on the state left by turns
-0..k-1. We therefore emit one AWM record per turn, carrying the prior user turns
-as conversation history plus the shared episode config so the env state is
+user turns into one episode. We collapse the whole episode into a single turn:
+all user turns are concatenated into one user message, emitting one AWM record
+per BFCL entry (task_idx 0) plus the shared episode config so the env state is
 reconstructable.
 
 Usage:
@@ -49,31 +49,30 @@ You should call list_tools first to discover available tools, then use call_tool
 When you have enough information to answer, output the answer directly without any tool_call tags."""
 
 
-def convert_entry(entry: dict) -> list[dict]:
-    """Turn one BFCL multi_turn_base entry into one AWM record per turn."""
+def convert_entry(entry: dict) -> dict:
+    """Turn one BFCL multi_turn_base entry into a single-turn AWM record."""
     scenario = entry["id"]
     turns = entry["question"]
-    num_turns = len(turns)
 
-    records = []
-    for task_idx in range(num_turns):
-        # Conversation history: every user message from turn 0 through turn k.
-        history = [msg for turn in turns[: task_idx + 1] for msg in turn]
-        prompt = [{"role": "system", "content": SYSTEM_PROMPT}, *history]
+    # Sum the episode into one turn: concatenate every user message across all
+    # turns into a single user prompt.
+    contents = [msg["content"] for turn in turns for msg in turn]
+    combined = "\n".join(contents)
+    prompt = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": combined},
+    ]
 
-        records.append(
-            {
-                "scenario": scenario,
-                "task_idx": task_idx,
-                "prompt": prompt,
-                "completion": [],
-                "involved_classes": entry.get("involved_classes", []),
-                "ground_truth": entry.get("path", []),
-                "initial_config": entry.get("initial_config", {}),
-                "num_turns": num_turns,
-            }
-        )
-    return records
+    return {
+        "scenario": scenario,
+        "task_idx": 0,
+        "prompt": prompt,
+        "completion": [],
+        "involved_classes": entry.get("involved_classes", []),
+        "ground_truth": entry.get("path", []),
+        "initial_config": entry.get("initial_config", {}),
+        "num_turns": len(turns),
+    }
 
 
 def main() -> None:
@@ -90,9 +89,9 @@ def main() -> None:
             if not line:
                 continue
             n_entries += 1
-            for record in convert_entry(json.loads(line)):
-                fout.write(json.dumps(record, ensure_ascii=False) + "\n")
-                n_records += 1
+            record = convert_entry(json.loads(line))
+            fout.write(json.dumps(record, ensure_ascii=False) + "\n")
+            n_records += 1
 
     print(f"Converted {n_entries} BFCL entries -> {n_records} AWM records: {args.out}")
 
