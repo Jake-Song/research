@@ -37,6 +37,7 @@ import asyncio
 from collections import Counter, defaultdict
 import copy
 import hashlib
+from itertools import combinations
 import json
 import os
 from pathlib import Path
@@ -444,17 +445,29 @@ def write_metrics(args: argparse.Namespace) -> None:
                 if maj is not None:
                     majorities[payload_id][model] = maj
         model_names = sorted(by_model)
-        common = [m for m in majorities.values() if all(name in m for name in model_names)]
-        same_label = sum(len({m[name] for name in model_names}) == 1 for m in common)
-        same_reward = sum(
-            len({REWARD_BY_LABEL.get(m[name], "infra") for name in model_names}) == 1
-            for m in common
-        )
+        pairs = []
+        for left, right in combinations(model_names, 2):
+            common = [
+                payload_majorities
+                for payload_majorities in majorities.values()
+                if left in payload_majorities and right in payload_majorities
+            ]
+            same_label = sum(m[left] == m[right] for m in common)
+            same_reward = sum(
+                REWARD_BY_LABEL.get(m[left], "infra") == REWARD_BY_LABEL.get(m[right], "infra")
+                for m in common
+            )
+            pairs.append(
+                {
+                    "models": [left, right],
+                    "common_payloads": len(common),
+                    "majority_label_agreement": same_label / len(common) if common else None,
+                    "majority_reward_agreement": same_reward / len(common) if common else None,
+                }
+            )
         metrics["cross_model"] = {
             "models": model_names,
-            "common_payloads": len(common),
-            "majority_label_agreement": same_label / len(common) if common else None,
-            "majority_reward_agreement": same_reward / len(common) if common else None,
+            "pairs": pairs,
         }
 
     metrics_path = Path(args.metrics_json)
@@ -484,12 +497,20 @@ def write_metrics(args: argparse.Namespace) -> None:
                 "## Cross Model",
                 "",
                 f"- Models: {', '.join(cross['models'])}",
-                f"- Common payloads: {cross['common_payloads']}",
-                f"- Majority-label agreement: {fmt(cross['majority_label_agreement'])}",
-                f"- Majority-reward agreement: {fmt(cross['majority_reward_agreement'])}",
                 "",
             ]
         )
+        for pair in cross["pairs"]:
+            lines.extend(
+                [
+                    f"### {' vs '.join(pair['models'])}",
+                    "",
+                    f"- Common payloads: {pair['common_payloads']}",
+                    f"- Majority-label agreement: {fmt(pair['majority_label_agreement'])}",
+                    f"- Majority-reward agreement: {fmt(pair['majority_reward_agreement'])}",
+                    "",
+                ]
+            )
     summary_path = Path(args.summary_md)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("\n".join(lines), encoding="utf-8")
