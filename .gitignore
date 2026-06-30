@@ -12,6 +12,9 @@ wheels/
 .venv
 
 uv.lock
+
+# logs
 rollouts.jsonl
 calibration.jsonl
 BFCL_v4_*
+judge_*
