@@ -310,7 +310,8 @@ class AWMEnvironment:
         incomplete=0.1, agent_error=0.0) keep the server's reward; scoring
         failures get 0.1 — the incomplete baseline — because a server failure
         is not the model's fault and must not score below group-mates whose
-        episodes were judged incomplete.
+        episodes were judged incomplete. They still count in group reward
+        normalization, but their own loss is masked from training.
 
         A scoring failure must also not crash the rollout worker —
         _generate_loop re-raises any task exception — so client-side errors
@@ -398,6 +399,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         self.reward_func_names = ["task_reward"]
         self._reward_ema = None
         self._dropped_groups = 0
+        self._infra_dropped = 0
         # id(completion) of rollouts whose final turn hit the generation length
         # cap; their loss is masked (samples dropped) under overlong filtering.
         self._overlong_completions: set[int] = set()
@@ -410,9 +412,10 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         # early-return below, so the dict's lifetime tracks the group and can't
         # leak when super() yields no samples.
         base_rewards = [self._rollout_base_rewards.pop(id(c), 0.0) for c in group.completions]
+        statuses = [self._rollout_statuses.pop(id(c)) for c in group.completions]
         if not samples:
             return samples
-        self._save_calibration(group, samples)
+        self._save_calibration(group, samples, statuses)
         group_reward = sum(s.metrics["reward"] for s in samples) / len(samples)
         self._reward_ema = (
             group_reward
@@ -465,10 +468,15 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         # turn) and sharing the rollout's episode-level advantage. super() returns
         # one sample per completion in group.completions order, so the zip aligns.
         expanded = []
-        for completion, s in zip(group.completions, samples):
+        for completion, s, status in zip(group.completions, samples, statuses, strict=True):
             turns = self._rollout_turns.pop(id(completion), None)
             overlong = id(completion) in self._overlong_completions
             self._overlong_completions.discard(id(completion))
+            if status not in _MODEL_OUTCOME_STATUSES:
+                # Scoring/infra failures keep their reward in group normalization
+                # above, but the rollout itself is not trainable policy behavior.
+                self._infra_dropped += 1
+                continue
             if self._overlong_filtering and overlong:
                 # DAPO overlong filtering: mask the loss of a length-truncated
                 # episode by dropping its training samples. Its reward stayed in the
@@ -494,6 +502,8 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         if self._overlong_filtering:
             for s in expanded:
                 s.metrics["overlong_filtering/dropped_samples"] = self._overlong_dropped
+        for s in expanded:
+            s.metrics["infra_filtering/dropped_samples"] = self._infra_dropped
         return expanded
 
     def _windowed_messages(self, prompt, completion):
@@ -662,8 +672,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         with open(TRAJECTORY_FILE, "a", encoding="utf-8") as f:
             f.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
 
-    def _save_calibration(self, group, samples):
-        statuses = [self._rollout_statuses.pop(id(completion)) for completion in group.completions]
+    def _save_calibration(self, group, samples, statuses):
         if CALIBRATION_FILE is None:
             return
 
