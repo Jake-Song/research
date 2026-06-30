@@ -415,7 +415,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         statuses = [self._rollout_statuses.pop(id(c)) for c in group.completions]
         if not samples:
             return samples
-        self._save_calibration(group, samples, statuses)
+        await asyncio.to_thread(self._save_calibration, group, samples, statuses)
         group_reward = sum(s.metrics["reward"] for s in samples) / len(samples)
         self._reward_ema = (
             group_reward
@@ -585,7 +585,14 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             # Rebuild the windowed context each turn (no monotonic accumulation): the
             # agent generates under the same truncated context the training sample
             # will use, so the vLLM old_log_probs match the trainer's input exactly.
-            prompt_ids = self.tokenizer.apply_chat_template(
+            # apply_chat_template / parse_response are synchronous CPU-bound calls
+            # (Jinja render + tokenize/detokenize) that run every turn for every
+            # inflight rollout. On the single rollout event loop they block long
+            # enough to stall the worker heartbeat, which trips check_health and
+            # tears down all env sockets at once; offload them to a thread so the
+            # loop keeps ticking.
+            prompt_ids = await asyncio.to_thread(
+                self.tokenizer.apply_chat_template,
                 self._windowed_messages(prompt, completion),
                 return_dict=False,
                 add_generation_prompt=True,
@@ -594,7 +601,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 **self.chat_template_kwargs,
             )
             turn_ids, turn_logprobs = await self._generate_one_turn(prompt_ids)
-            assistant_message = parse_response(self.tokenizer, turn_ids)
+            assistant_message = await asyncio.to_thread(parse_response, self.tokenizer, turn_ids)
             completion.append(assistant_message)
             turn_mask = self._turn_mask(turn_ids)
             # Capture this turn as its own training sample (windowed context + turn).
@@ -635,7 +642,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 self._rollout_rewards[id(completion)] = reward
                 self._rollout_base_rewards[id(completion)] = base_reward
                 self._rollout_statuses[id(completion)] = status
-                self._save_trajectory(env, prompt, completion, reward, status)
+                await asyncio.to_thread(self._save_trajectory, env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
             tool_messages, n_calls, n_failures = await self._execute_tool_calls(tool_calls, tool_dict)
@@ -654,7 +661,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                 self._rollout_base_rewards[id(completion)] = -1.0
                 self._rollout_statuses[id(completion)] = "format_violation"
                 await env._close_session()
-                self._save_trajectory(env, prompt, completion, -1.0, "format_violation")
+                await asyncio.to_thread(self._save_trajectory, env, prompt, completion, -1.0, "format_violation")
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
             iteration_num += 1
 
