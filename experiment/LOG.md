@@ -540,3 +540,27 @@ Companion `calibration.jsonl` = per-task difficulty classification, 109 tasks @ 
 2. Mask the overlong length penalty on scoring-failure rollouts (89 currently mislabeled negative).
 3. Add a **solve-rate** difficulty filter for the residual **17 never-solved groups** the fixed base-std filter still keeps (their base reward varies via the 0.0/0.1 split). The length-penalty leak itself is already fixed (`274c87e`); this is the remaining, smaller gap.
 4. Drop the `direct_mcp_names`→needs-signal recommendation for this env; it isn't hurting reward.
+
+## 2026-07-01 — `rollouts.jsonl` (branch `exp/vllm-tp2-pp3`)
+
+1,233 rollouts, 107 (scenario, task_idx) groups. Mean reward **0.403**. This run uses a **graded continuous verifier reward**, not the old discrete 1.0/0.1/0.0 scheme: `complete` spans 0.0–1.0 (mean +0.903) and `incomplete` spans −0.9–0.1 (mean −0.091). Mass spikes at 1.0 (521), 0.1 (435), 0.0 (63), and a **−0.9 floor (84)**. No clear training trend — per-tenth mean bounces 0.33–0.57 with no slope.
+
+**Headline: the −0.9 floor and essentially all negative reward is one failure mode — a runaway, never-closed `<think>` block that gets truncated by `max_tokens`.** 118 rollouts (10%) end on an assistant message with an open `<think>` and no closing `</think>`; they average reward **−0.592** vs **+0.508** for everything else. They explain **79 of 84** floor rollouts and **79 of 145** negatives. Typical trajectory: model calls `list_tools` once, then emits a ~17.7k-char monologue reasoning about which tool to use, runs out of tokens mid-sentence, and never issues a second tool call (floor rollouts average 1.2 tool calls). Note my naive "empty last message" truncation check only caught 24 — these messages are huge, not empty, so length-based detection undercounts; check for unbalanced `<think>` instead.
+
+This is the `--thinking-token-budget` failure from the skill's Part 4b. Fix: cap/budget thinking tokens (or raise `max_tokens` and force a tool call), so the model stops deliberating and acts.
+
+### Difficulty calibration (71 full groups of 8/16)
+- Mean solve-rate (reward==1.0) **0.45** — close to the GRPO-ideal 0.5, well calibrated overall.
+- **useful (spread) = 37/71 (52%)**; degenerate split is asymmetric: **23 never-solved (32%)** vs **11 always-solved (15%)** → dead-hard tasks are the bigger drag; difficulty filtering should weight toward pruning/replacing the never-solved groups.
+- Continuous-reward group std: 17/71 (24%) have ~zero std (no GRPO advantage); mean std 0.275.
+- Worst scenarios pulling the mean down: `form_builder_2` (−0.78), `iot_smart_infrastructure_management_1` (−0.70), `job_board_1` (−0.55), `hr_system_1` (−0.47), `booking_platform_6` (−0.42) — these dominate the runaway-think floor hits.
+
+### Other notes
+- **`direct_mcp_names` is no longer a content bug:** the env now returns a clear `Unknown tool 'X'. The only tools you can call directly are ['call_tool', 'list_tools']` (the prior KeyError fix landed). Still appears in 239 failures but isn't the driver here.
+- Scoring failures ~7%: `no_verifier` (32), `code_verify_error` (42, a new status — graded code verification, mostly −0.9 floor from the same runaway-think dumps), `server_error` (11).
+- Truncation aside, mechanics are fine: only 7 `no_tool_calls` refusals among failures.
+
+**Bottom line:** highest-leverage fix is bounding thinking tokens to kill the 10% runaway-`<think>` truncations (−0.592 mean, all the negative reward). Second, prune/replace the 23 never-solved hard groups to recover GRPO signal.
+
+---
+
