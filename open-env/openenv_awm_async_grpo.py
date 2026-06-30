@@ -1105,17 +1105,12 @@ def main() -> None:
 
     trainer.train(resume_from_checkpoint=args.resume_from_checkpoint)
 
-    # Persist the final step. save_steps only writes on its cadence, so a run
-    # ending off a save_steps boundary would otherwise lose the last step's
-    # weights. save_model is distributed-safe under FSDP2/multi-GPU: every rank
-    # must call it so the full sharded state dict is gathered, and it writes only
-    # on the main process. Keep the checkpoint-dir bookkeeping/logging on rank 0.
-    last_step = trainer.state.global_step
-    final_ckpt = os.path.join(args.output_dir, f"checkpoint-{last_step}")
-    trainer.save_model(final_ckpt)
-    trainer.save_model(args.output_dir)
-    if trainer.is_world_process_zero():
-        print(f"Saved final checkpoint at step {last_step} to {final_ckpt}")
+    # No separate final checkpoint: when save_steps < max_steps the periodic
+    # save_steps checkpoints already cover the run; when save_steps >= max_steps
+    # no intermediate checkpoint is written at all. In both cases the Hub upload
+    # captures the final weights, so a final checkpoint dir would just duplicate
+    # it. push_to_hub saves the model first (distributed-safe under FSDP2: every
+    # rank gathers the sharded state dict, only the main process uploads).
     if args.push_to_hub:
         trainer.push_to_hub(commit_message="Upload model")
 
