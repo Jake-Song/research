@@ -590,3 +590,44 @@ This is the `--thinking-token-budget` failure from the skill's Part 4b. Fix: cap
 
 ---
 
+## 2026-07-01 - `rollouts.jsonl` reanalysis with updated learning-signal metrics
+
+Re-ran the updated `inspect-rollouts` view on the repo-root `rollouts.jsonl`: **558 rollouts**, mean reward **0.414**, statuses: complete 287, incomplete 198, code_verify_error 31, agent_error 33, no_verifier 8, server_error 1. Main reward mass: 1.0 x245, 0.1 x173, 0.0 x35, -0.9 x34, -1.0 x4, plus continuous graded values.
+
+### Trajectory trend
+- First 100 rollouts: mean **0.225**, complete rate **43%**.
+- Last 100 rollouts: mean **0.565**, complete rate **65%**.
+- First half: mean **0.365**, complete rate **46.6%**.
+- Second half: mean **0.463**, complete rate **56.3%**.
+
+This is a mild upward tilt, but not a clean monotonic learning curve. Per-tenth reward remains task-mix noisy: 0.55, -0.12, 0.41, 0.42, 0.55, 0.17, 0.58, 0.49, 0.39, 0.65, 0.66.
+
+### Learning signal
+Full groups only: **54** full `(scenario, task_idx)` groups, **25** partial/non-multiple groups.
+
+- **Strict learnable solve-spread: 22/54 = 40.7%**. These groups contain both solved rollouts (`reward == 1.0`) and not-solved rollouts, so they provide the clearest GRPO contrast.
+- **Any reward-spread: 33/54 = 61.1%**. This is looser because it may include partial-credit or infrastructure/noise variation, not necessarily solve/fail contrast.
+- **Zero-variance: 21/54 = 38.9%**. These groups provide no GRPO advantage.
+- Solve-rate buckets: never solved 20, (0,25%) 5, [25,50%) 4, [50,75%) 2, [75,100%) 11, always solved 12.
+- Mean solve-rate: **0.447**, close to the GRPO-ideal 0.5.
+
+`calibration.jsonl` gives a more optimistic curriculum view: **37/58 = 63.8% learnable**, with 12 mastered, 5 all failed, and 4 infrastructure_failure.
+
+### Truncation
+Open final `<think>` must be split into harmful vs harmless:
+
+- Open final `<think>` symptom: **49/558 = 8.8%**.
+- Harmful open-think with negative reward: **34/558 = 6.1%**.
+- Harmless/already-complete open-think: **15/558 = 2.7%**.
+- Harmful open-think explains **34/75 = 45.3%** of negative-reward rollouts.
+
+The harmful pattern is: one early tool call, then a very long unclosed `<think>` that hits `max_tokens` before the next action. The harmless pattern is different: the environment state was already correct, so the verifier scored `complete` even though the final reasoning text was unclosed.
+
+### Failure routing
+Worst scenarios by mean reward: `clinic_management_2` (-0.826), `personal_health_records_management_1` (-0.786), `accounting_2` (-0.642), `social_networking_1` (-0.275), `personal_finance_management_1` (-0.256). These concentrate the negative/truncation-heavy cases.
+
+Direct MCP-name calls are still common but are not the primary regression signal in this run: 212/558 rollouts have direct-name calls, mean reward **0.445**, complete rate **52.4%**; wrapper-only tool-using rollouts have mean **0.389**, complete rate **50.6%**. Treat direct-name calls as recoverable wasted turns, not the top bug.
+
+Scoring failures remain a filter/masking issue: code_verify_error 31, no_verifier 8, server_error 1. These should not be interpreted as policy failures.
+
+**Bottom line:** the clearer rollout-health numbers are: **40.7% strict learnable full groups**, **38.9% zero-variance full groups**, and **6.1% reward-damaging truncation**. The run has a real but noisy late improvement; the best next levers are still bounding thinking tokens and filtering/replacing never-solved, always-solved, and infrastructure-failure groups.
