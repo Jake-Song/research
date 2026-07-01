@@ -32,6 +32,11 @@ throughput is bottlenecked by the env, not the GPU.
 - An external LLM judge for the `sql` verifier (an OpenAI-compatible endpoint).
 - GPUs with FP8 tensor cores (Hopper/Ada/Blackwell) for the default FP8 trainer
   config.
+- **OOD eval only** (`experiment/mcp_universe_eval.py`): MCP-Universe
+  **editable-installed from a clone** (`uv pip install -e ../MCP-Universe`, not a
+  plain wheel — its BenchmarkRunner resolves task-JSON paths against the installed
+  package dir), plus its live MCP servers and per-domain API keys
+  (finance/yfinance, `GOOGLE_MAPS_API_KEY`). Not needed for training.
 
 ## 1. Install
 
