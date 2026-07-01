@@ -23,7 +23,7 @@ MAX_NUM_BATCHED_TOKENS="${MAX_NUM_BATCHED_TOKENS:-32768}"
 # Factor 6 = TP(2) x PP(3): TP=2 keeps 16 q-heads / 4 kv-heads per GPU, and the
 # 36 decoder layers split evenly into 3 pipeline stages of 12.
 CUDA_VISIBLE_DEVICES=0,1,2,3,4,5 VLLM_SERVER_DEV_MODE=1 \
-    uv run vllm serve Qwen/Qwen3-4B-Thinking-2507 \
+    uv run vllm serve Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100 \
         --tensor-parallel-size 2 \
         --pipeline-parallel-size 3 \
         --max-model-len 32768 \

@@ -1,5 +1,5 @@
 model:
-  id: Qwen/Qwen3-4B-Thinking-2507
+  id: Jakemu/Qwen3-4B-Thinking-awm-async-grpo-100
   resume_from_checkpoint: null
 
 environment:
@@ -16,7 +16,7 @@ verifier:
 
 dataset:
   size: 107
-  start: 0
+  start: 107
   num_scenarios: 100  # if set, size by unique-scenario coverage instead of size
 
 rollout:
@@ -41,16 +41,16 @@ dapo:
   soft_overlong_cache: null      # L_cache tokens; null => 20% of max_completion_length
 
 training:
-  output_dir: Qwen3-4B-Thinking-awm-async-grpo-100
+  output_dir: Qwen3-4B-Thinking-awm-async-grpo-200
   gradient_accumulation_steps: 16
-  per_device_batch_size: 2
+  per_device_batch_size: 1
   learning_rate: 7.0e-7
   optim: adamw_torch_fused
   max_steps: -1
   num_epochs: 1
 
 checkpointing:
-  save_steps: 30
+  save_steps: 10
   save_total_limit: null
   logging_steps: 1
 
@@ -64,4 +64,4 @@ hub:
 
 wandb:
   project: openenv-awm-continuous
-  name: awm-continuous-async-grpo-100
+  name: awm-continuous-async-grpo-200
