@@ -564,3 +564,29 @@ This is the `--thinking-token-budget` failure from the skill's Part 4b. Fix: cap
 
 ---
 
+## 2026-07-01 — `rollouts.jsonl` + `calibration.jsonl` (repo root, branch `main`, "run #2 upto scenario 200")
+
+558 rollouts over 79 (scenario, task_idx) groups. Mean reward **0.414**. Same graded continuous verifier as the `exp/vllm-tp2-pp3` run: `complete` spans 0.0–1.0 (mean +0.92), `incomplete` spans −0.90–0.10 (mean −0.14). Histogram mass at 1.0 (246), 0.1 (173), 0.0 (36), and a **−0.9 floor (34)** plus a handful at −1.0 (4). Per-tenth reward is noisy with a mild upward tilt (0.55 → dip −0.12 → … → 0.66); no strong slope over this partial run.
+
+**Headline is unchanged: essentially all negative reward is the runaway `<think>` truncation.** 75 rollouts have reward < 0 (mean −0.65); **34 of them end on an assistant message with an open `<think>` and no `</think>`**, and those 34 are exactly the −0.9 floor. Signature trajectory (`clinic_management_2#4`, reward −0.9): one `list_tools` call, then a long `<think>` monologue that runs out of `max_tokens` mid-sentence — no second tool call. Negatives average 3.2 tool calls vs 4.4 for `complete` r=1.0. Fix remains `--thinking-token-budget` (skill Part 4b).
+
+### Difficulty calibration (54 full groups of 8/16)
+- Mean solve-rate (reward==1.0) **0.45** — close to GRPO-ideal 0.5, well calibrated overall.
+- **useful (spread) = 22/54 (41%)**; degenerate split asymmetric: **20 never-solved (37%)** vs **12 always-solved (22%)** → dead-hard tasks are the bigger drag; weight filtering toward pruning/replacing never-solved groups.
+- Zero-variance (strictly identical rewards): **21/54 full groups (39%)** — no GRPO advantage, ~40% of gradient wasted.
+- Worst scenarios: `clinic_management_2` (−0.83), `personal_health_records_management_1` (−0.79), `accounting_2` (−0.64), `social_networking_1` (−0.28), `personal_finance_management_1` (−0.26) — these dominate the runaway-think floor.
+
+### calibration.jsonl (running difficulty filter, 58 tasks)
+- Precomputed per-task summary built across **model_versions 1–10** (curriculum/difficulty filter running during training), independent of the raw rollouts above (58 tasks vs 79 in rollouts; all 58 present in rollouts).
+- Classification mix: **learnable 37, mastered 12, all failed 5, infrastructure_failure 4**. `mastered` (all 8/8 complete) and both failure buckets have zero spread → drop from the train set; the 37 `learnable` carry the signal.
+- The 4 `infrastructure_failure` tasks are all `code_verify_error`/`no_verifier` forced to 0.1 (scorer's fault, not the model) — correctly quarantined.
+
+### Other notes
+- **`direct_mcp_names` is clean, not a bug:** 39 failing rollouts call an MCP tool by name, but the env returns the explicit `Unknown tool 'X'. The only tools you can call directly are ['call_tool', 'list_tools']` (no more bare KeyError). Wasted turns, not a crash.
+- New status **`code_verify_error`** (31): graded code verification; 28 sit at the 0.1 scoring floor, concentrated in 4 tasks (`social_friends_presence_management_1`, `payments_donations_1`, `booking_appointments_1`, `logistics_management_5`) — scorer-side, exclude from training. Plus `no_verifier` (8) and `server_error` (1). Total scoring failures ~7%.
+- Mechanics otherwise fine: 0 `no_tool_calls` refusals among failures.
+
+**Bottom line:** same two levers as the prior run — (1) bound thinking tokens to kill the ~6% runaway-`<think>` truncations that account for all negative reward; (2) prune the 20 never-solved + 12 always-solved + 4 infra groups (~40% zero-variance) so GRPO trains on the 22 useful-spread groups.
+
+---
+
