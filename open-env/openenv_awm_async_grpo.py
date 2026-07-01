@@ -58,6 +58,7 @@ import json
 import logging
 from pathlib import Path
 import statistics
+import time
 from datetime import date
 
 import yaml
@@ -391,6 +392,15 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         # std filter; consumed (popped) in _score_group.
         self._rollout_base_rewards: dict[int, float] = {}
         self._rollout_statuses: dict[int, str] = {}
+        # (start, end) monotonic timestamps of the out-of-band LLM judge
+        # (env._score_rollout), keyed by id(completion). The judge runs inside
+        # _generate_one, so its latency is folded into sampling_batch_seconds'
+        # generation phase rather than the cheap _score_group timer. _score_group
+        # derives both the per-rollout judge_time_ms and the group-level judge
+        # span (max end − min start, so overlap across inflight slots is counted
+        # once) from these. Consumed (popped) there; absent for episodes that
+        # skip the judge.
+        self._rollout_judge_window: dict[int, tuple[float, float]] = {}
         # Per-turn (windowed_prompt_ids, turn_ids, turn_mask, turn_logprobs) lists,
         # keyed by id(completion); consumed by _score_group to split each rollout
         # into one training sample per assistant turn.
@@ -413,6 +423,19 @@ class AWMRolloutWorker(AsyncRolloutWorker):
         # leak when super() yields no samples.
         base_rewards = [self._rollout_base_rewards.pop(id(c), 0.0) for c in group.completions]
         statuses = [self._rollout_statuses.pop(id(c)) for c in group.completions]
+        # Popped here (not below) so the dict can't leak when super() yields no
+        # samples; None covers episodes that skipped the judge.
+        judge_windows = [self._rollout_judge_window.pop(id(c), None) for c in group.completions]
+        judged = [w for w in judge_windows if w is not None]
+        # Wall-clock span of judging on this group's critical path: first judge
+        # start to last judge finish, counting overlap across inflight slots once.
+        group_judge_span_ms = (
+            (max(e for _, e in judged) - min(s for s, _ in judged)) * 1000 if judged else 0.0
+        )
+        # Generation phase of sampling_batch_seconds: generation start -> group
+        # queued for scoring, i.e. token decode + the judge (which runs inside
+        # _generate_one). Excludes the scoring-queue wait and _score_group.
+        generation_phase_s = group.queued_at - group.started_at
         if not samples:
             return samples
         await asyncio.to_thread(self._save_calibration, group, samples, statuses)
@@ -422,8 +445,17 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             if self._reward_ema is None
             else _REWARD_EMA_ALPHA * group_reward + (1 - _REWARD_EMA_ALPHA) * self._reward_ema
         )
-        for s in samples:
+        for s, window in zip(samples, judge_windows, strict=True):
             s.metrics["reward_ema"] = self._reward_ema
+            s.metrics["judge_time_ms"] = (window[1] - window[0]) * 1000 if window is not None else 0.0
+            s.metrics["group_judge_span_ms"] = group_judge_span_ms
+            s.metrics["generation_phase_s"] = generation_phase_s
+
+        judge_pct = group_judge_span_ms / 1000 / generation_phase_s if generation_phase_s > 0 else 0.0
+        logger.info(
+            f"[timing] generation_phase={generation_phase_s:.1f}s, "
+            f"judge_span={group_judge_span_ms / 1000:.1f}s ({judge_pct:.0%} of generation)"
+        )
 
         # DAPO dynamic sampling: drop groups with zero reward std. When every
         # rollout in a group lands on the same reward, the group-normalized
@@ -622,6 +654,7 @@ class AWMRolloutWorker(AsyncRolloutWorker):
             tool_calls = assistant_message.get("tool_calls")
             if tool_calls is None or (max_iterations is not None and iteration_num >= max_iterations):
                 # Normal termination: score the finished episode with the LLM judge.
+                t_judge = time.monotonic()
                 try:
                     reward, status = await env._score_rollout()
                     base_reward = reward
@@ -639,9 +672,11 @@ class AWMRolloutWorker(AsyncRolloutWorker):
                     # and check_health doesn't abort the whole run.
                     reward, status = 0.1, "rollout_error"
                     base_reward = 0.1
+                judge_end = time.monotonic()
                 self._rollout_rewards[id(completion)] = reward
                 self._rollout_base_rewards[id(completion)] = base_reward
                 self._rollout_statuses[id(completion)] = status
+                self._rollout_judge_window[id(completion)] = (t_judge, judge_end)
                 await asyncio.to_thread(self._save_trajectory, env, prompt, completion, reward, status)
                 return completion, completion_ids, completion_logprobs, tool_mask, tool_call_count, tool_failure_count
 
